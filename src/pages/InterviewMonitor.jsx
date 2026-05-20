@@ -168,7 +168,6 @@ export default function InterviewMonitor({ studentName, customQuestions, onExit,
   const lastSnapshotTimeRef = useRef(0);
   const sessionStartTimeRef = useRef(0);
   
-  // Per-question tracking
   const snapshotLimitsRef = useRef({ confident: 0, focused: 0, nervous: 0 });
 
   const badLightiningRef = useRef(null);
@@ -315,7 +314,6 @@ export default function InterviewMonitor({ studentName, customQuestions, onExit,
       return;
     }
 
-    // RESET SNAPSHOT QUOTAS FOR THE NEW 60S CYCLE
     snapshotLimitsRef.current = { confident: 0, focused: 0, nervous: 0 };
 
     setIsAsking(true);
@@ -327,7 +325,7 @@ export default function InterviewMonitor({ studentName, customQuestions, onExit,
     if (timerTimeoutRef.current) clearTimeout(timerTimeoutRef.current);
 
     if (speechTrackerRef.current) {
-      speechTrackerRef.current.stop(); 
+      speechTrackerRef.current.stop(); // HARD PAUSE: Kills mic instantly
       speechTrackerRef.current.clearTranscript();
     }
     
@@ -340,9 +338,14 @@ export default function InterviewMonitor({ studentName, customQuestions, onExit,
     setCurrentQuestion(nextQuestionText);
     
     speakQuestion(nextQuestionText, () => {
+      // CALLBACK: The AI has completely finished talking. Safe to listen now.
       setIsAsking(false);
+      setLiveTranscript("");
+      currentTranscriptRef.current = "";
+      
       if (speechTrackerRef.current) {
-        speechTrackerRef.current.start(); 
+        speechTrackerRef.current.clearTranscript(); 
+        speechTrackerRef.current.start(); // WAKE UP MIC
       }
       setIsTimerRunning(true);
     });
@@ -355,7 +358,7 @@ export default function InterviewMonitor({ studentName, customQuestions, onExit,
     if (timerTimeoutRef.current) clearTimeout(timerTimeoutRef.current);
 
     if (speechTrackerRef.current) {
-       speechTrackerRef.current.stop(); 
+       speechTrackerRef.current.stop(); // HARD PAUSE: Kill mic while evaluating
     }
     
     const answeredQuestion = currentQuestion;
@@ -408,8 +411,12 @@ export default function InterviewMonitor({ studentName, customQuestions, onExit,
     const textToSpeak = `You scored ${evaluation.score} out of 100. ${evaluation.feedback}`;
     
     speakQuestion(textToSpeak, () => {
+        // CALLBACK: AI finished reading feedback. 
+        setLiveTranscript("");
+        currentTranscriptRef.current = "";
         if (speechTrackerRef.current) {
-            speechTrackerRef.current.start(); 
+            speechTrackerRef.current.clearTranscript();
+            speechTrackerRef.current.start(); // WAKE UP MIC (Allows candidate to talk between questions if they want)
         }
     });
 
@@ -711,7 +718,8 @@ export default function InterviewMonitor({ studentName, customQuestions, onExit,
           <video ref={videoRef} autoPlay playsInline muted />
           <canvas ref={overlayRef} className={`overlay${overlayVisible ? "" : " hidden"}`} style={{ zIndex: 2 }} />
           
-          {isCameraOn && liveTranscript && (
+          {/* ONLY DISPLAY TRANSCRIPT IF NOT ACTIVELY ASKING OR EVALUATING */}
+          {isCameraOn && liveTranscript && !isAsking && !isEvaluating && (
             <div style={{
               position: "absolute", top: "20px", left: "20px",
               background: "rgba(15, 23, 32, 0.85)", padding: "15px", borderRadius: "12px", 
@@ -788,6 +796,14 @@ export default function InterviewMonitor({ studentName, customQuestions, onExit,
                 <span style={{ fontSize: "12px", textTransform: "uppercase", color: "#9fb0c3", letterSpacing: "0.5px" }}>Feedback</span>
                 <p style={{ margin: "4px 0 0 0", fontSize: "13px" }}>{answerResult.feedback}</p>
               </div>
+
+              {/* --- NEW: DISPLAY IDEAL ANSWER --- */}
+              {answerResult.idealAnswer && (
+                <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid rgba(56, 189, 248, 0.3)' }}>
+                  <span style={{ fontSize: "12px", textTransform: "uppercase", color: "#22c55e", letterSpacing: "0.5px" }}>💡 Ideal Example</span>
+                  <p style={{ margin: "4px 0 0 0", fontSize: "13px", color: '#e6edf3', lineHeight: "1.5" }}>{answerResult.idealAnswer}</p>
+                </div>
+              )}
             </div>
           )}
 

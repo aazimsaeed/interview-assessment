@@ -23,18 +23,19 @@ export const createSpeechTracker = (onMetricUpdate) => {
   let fullTranscript = ""; 
   let isStoppedManually = false; 
   
-  // Soft Pause Flag. It starts paused so it doesn't transcribe ambient noise immediately.
+  // Start paused so it doesn't transcribe ambient noise or the AI's initial greeting
   let isSoftPaused = true; 
 
   let cumulativeTimeMs = 0;
   let chunkStartTime = 0;
 
   recognition.onstart = () => {
-    chunkStartTime = performance.now();
+    if (!isSoftPaused) {
+        chunkStartTime = performance.now();
+    }
   };
 
   recognition.onresult = (event) => {
-    // If soft-paused (like when the AI is talking), ignore the text completely
     if (isSoftPaused) return; 
 
     let currentFinal = '';
@@ -54,17 +55,11 @@ export const createSpeechTracker = (onMetricUpdate) => {
       const words = currentFinal.trim().split(/\s+/);
       totalWords += words.length;
 
-      // --- ROBUST MULTI-WORD & CASE-INSENSITIVE DETECTION ---
       FILLER_WORDS.forEach(filler => {
-        // Escape regex special characters just in case
         const escapedFiller = filler.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        
-        // Ensure we only match whole words (so "um" doesn't match "umbrella")
         const startBoundary = /^\w/.test(filler) ? '\\b' : '';
         const endBoundary = /\w$/.test(filler) ? '\\b' : '';
         
-        // 'g' = global (checks entire sentence)
-        // 'i' = case-insensitive (matches Um, UM, uM, um)
         const regex = new RegExp(`${startBoundary}${escapedFiller}${endBoundary}`, 'gi');
         
         const matches = currentFinal.match(regex);
@@ -72,42 +67,47 @@ export const createSpeechTracker = (onMetricUpdate) => {
           fillerCount += matches.length;
         }
       });
-      // ----------------------------------------------------
     }
 
     const currentChunkTimeMs = performance.now() - chunkStartTime;
     const totalTimeMinutes = (cumulativeTimeMs + currentChunkTimeMs) / 60000;
     const wpm = totalTimeMinutes > 0 ? Math.round(totalWords / totalTimeMinutes) : 0;
 
-    // Combine final text with live interim text so the candidate sees their words instantly
     const displayTranscript = (fullTranscript + currentInterim).trim();
 
     onMetricUpdate({ wpm, fillerCount, totalWords, fullTranscript: displayTranscript });
   };
 
   recognition.onerror = (event) => {
-    if (event.error !== 'no-speech') {
+    if (event.error === 'not-allowed') {
+        isStoppedManually = true;
+    }
+    if (event.error !== 'no-speech' && event.error !== 'aborted') {
         console.error("Speech recognition error:", event.error);
     }
   };
 
   recognition.onend = () => {
-    // If the browser tries to sleep the mic, immediately restart it to keep it "warmed up"
-    if (!isStoppedManually) {
-      try { recognition.start(); } catch (error) {}
+    // Only auto-restart if the system is supposed to be actively listening to the user
+    if (!isStoppedManually && !isSoftPaused) {
+      setTimeout(() => {
+          try { recognition.start(); } catch (error) {}
+      }, 250);
     }
   };
 
-  // Turn it on IMMEDIATELY in the background when the interview starts
-  try { recognition.start(); } catch (e) {}
-
   return {
     start: () => {
+      // WAKE UP MIC: Called strictly after the AI finishes speaking
       isSoftPaused = false;
       chunkStartTime = performance.now(); 
+      try { recognition.start(); } catch (e) {}
     },
     stop: () => {
+      // HARD PAUSE: Instantly kills the microphone buffer so the AI's voice isn't caught
       isSoftPaused = true;
+      try { recognition.abort(); } catch (e) {} 
+      
       if (chunkStartTime > 0) {
         cumulativeTimeMs += performance.now() - chunkStartTime;
         chunkStartTime = 0;
@@ -115,7 +115,8 @@ export const createSpeechTracker = (onMetricUpdate) => {
     },
     turnOff: () => {
       isStoppedManually = true;
-      try { recognition.stop(); } catch (e) {}
+      isSoftPaused = true;
+      try { recognition.abort(); } catch (e) {}
     },
     clearTranscript: () => {
       fullTranscript = "";
