@@ -1,27 +1,63 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from pydantic import BaseModel
-from typing import List
-from sqlalchemy.orm import Session
+from typing import List, Optional
 import google.generativeai as genai
 import os
-import json
 import uuid
 import hashlib
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-# --- IMPORT FROM DATABASE FILE ---
-from database import engine, SessionLocal, Base, InterviewSessionDB, RecruiterDB, CandidateDB, ReportDB
+# --- IMPORT MONGODB COLLECTIONS ---
+from database import (
+    client, 
+    init_db_indexes,
+    recruiters_collection, 
+    candidates_collection, 
+    interviews_collection, 
+    reports_collection, 
+    hidden_sessions_collection
+)
 
 # Load environment variables
 load_dotenv(override=True)
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-app = FastAPI()
+# Application Lifespan (Startup / Shutdown)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        # 1. Force a quick connection test on startup. This is crucial for deployment.
+        print("⏳ Attempting to connect to MongoDB...")
+        await client.server_info()
+        print("✅ Successfully connected to MongoDB!")
+        
+        # 2. Initialize DB indexes
+        await init_db_indexes()
+        
+        yield # App runs here
+        
+    except Exception as e:
+        print(f"\n❌ APPLICATION STARTUP FAILED: MongoDB Connection Error.")
+        print(f"Details: {e}\n")
+        print("👉 FIX: Ensure MONGO_URL environment variable is correct.")
+        print("👉 FIX: If using MongoDB Atlas, check that your deployment's IP is whitelisted.\n")
+        raise e
+    finally:
+        # Close connection on shutdown
+        client.close()
+
+app = FastAPI(lifespan=lifespan)
+
+# --- CORS Configuration for Deployment ---
+# In production, you should restrict this to your actual frontend domain instead of "*"
+FRONTEND_URL = os.getenv("FRONTEND_URL", "*") 
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  
+    allow_origins=[FRONTEND_URL] if FRONTEND_URL != "*" else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -29,16 +65,6 @@ app.add_middleware(
 
 # AI MODEL INITIALIZATION
 model = genai.GenerativeModel('gemini-2.5-flash')
-
-# Create tables
-Base.metadata.create_all(bind=engine)
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 # ==========================================
 # PYDANTIC SCHEMAS (Data Validation)
@@ -83,7 +109,7 @@ class ReportDetails(BaseModel):
     weaknesses: List[str]
     suggestions: List[str]
     timeline: list = []
-    snapshots: list = []  # <--- Added snapshots field to bypass Pydantic validation rejection
+    snapshots: list = [] 
 
 class ReportPayload(BaseModel):
     interview_id: str
@@ -101,83 +127,131 @@ def hash_password(password: str):
 # ==========================================
 
 @app.post("/api/recruiters/register")
-async def register_recruiter(user: UserAuth, db: Session = Depends(get_db)):
-    if db.query(RecruiterDB).filter(RecruiterDB.username == user.username).first():
+async def register_recruiter(user: UserAuth):
+    existing_user = await recruiters_collection.find_one({"username": user.username})
+    if existing_user:
         raise HTTPException(status_code=400, detail="Username already exists")
     
-    new_user = RecruiterDB(username=user.username, password_hash=hash_password(user.password))
-    db.add(new_user)
-    db.commit()
+    await recruiters_collection.insert_one({
+        "username": user.username, 
+        "password_hash": hash_password(user.password)
+    })
     return {"message": "Recruiter registered successfully"}
 
 @app.post("/api/recruiters/login")
-async def login_recruiter(user: UserAuth, db: Session = Depends(get_db)):
-    db_user = db.query(RecruiterDB).filter(RecruiterDB.username == user.username).first()
-    if not db_user or db_user.password_hash != hash_password(user.password):
+async def login_recruiter(user: UserAuth):
+    db_user = await recruiters_collection.find_one({"username": user.username})
+    if not db_user or db_user["password_hash"] != hash_password(user.password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    return {"username": db_user.username, "role": "recruiter"}
+    return {"username": db_user["username"], "role": "recruiter"}
 
 @app.post("/api/candidates/register")
-async def register_candidate(user: CandidateRegister, db: Session = Depends(get_db)):
-    if db.query(CandidateDB).filter(CandidateDB.username == user.username).first():
+async def register_candidate(user: CandidateRegister):
+    existing_user = await candidates_collection.find_one({"username": user.username})
+    if existing_user:
         raise HTTPException(status_code=400, detail="Username already exists")
     
-    new_user = CandidateDB(
-        username=user.username, 
-        password_hash=hash_password(user.password),
-        email=user.email,
-        phone=user.phone,
-        role=user.role 
-    )
-    db.add(new_user)
-    db.commit()
+    await candidates_collection.insert_one({
+        "username": user.username, 
+        "password_hash": hash_password(user.password),
+        "email": user.email,
+        "phone": user.phone,
+        "role": user.role 
+    })
     return {"message": "Candidate registered successfully"}
 
 @app.post("/api/candidates/login")
-async def login_candidate(user: UserAuth, db: Session = Depends(get_db)):
-    db_user = db.query(CandidateDB).filter(CandidateDB.username == user.username).first()
-    if not db_user or db_user.password_hash != hash_password(user.password):
+async def login_candidate(user: UserAuth):
+    db_user = await candidates_collection.find_one({"username": user.username})
+    if not db_user or db_user["password_hash"] != hash_password(user.password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    return {"username": db_user.username, "role": "candidate"}
+    return {"username": db_user["username"], "role": "candidate"}
 
 @app.post("/api/candidates/role")
-async def set_candidate_role(payload: RoleUpdate, db: Session = Depends(get_db)):
-    db_user = db.query(CandidateDB).filter(CandidateDB.username == payload.username).first()
-    if not db_user:
+async def set_candidate_role(payload: RoleUpdate):
+    result = await candidates_collection.update_one(
+        {"username": payload.username}, 
+        {"$set": {"role": payload.role}}
+    )
+    if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Candidate not found")
-    db_user.role = payload.role
-    db.commit()
     return {"message": "Role saved successfully"}
 
 @app.get("/api/candidates")
-async def get_all_candidates(db: Session = Depends(get_db)):
-    users = db.query(CandidateDB).all()
-    return [{"username": u.username, "email": u.email, "phone": u.phone, "role": u.role or "Not Selected"} for u in users]
+async def get_all_candidates():
+    cursor = candidates_collection.find({}, {"_id": 0})
+    users = await cursor.to_list(length=1000)
+    return [
+        {
+            "username": u["username"], 
+            "email": u.get("email", ""), 
+            "phone": u.get("phone", ""), 
+            "role": u.get("role", "Not Selected")
+        } for u in users
+    ]
 
-# --- FETCH INTERVIEWS (UPDATED TO INCLUDE TIMESTAMP) ---
+# ==========================================
+# FETCH & DELETE INTERVIEW ENDPOINTS
+# ==========================================
+
 @app.get("/api/candidates/{username}/interviews")
-async def get_candidate_interviews(username: str, db: Session = Depends(get_db)):
-    interviews = db.query(InterviewSessionDB).filter(InterviewSessionDB.candidate_name == username).all()
+async def get_candidate_interviews(username: str, role: str = "candidate"):
+    # Find all interviews for candidate
+    interviews = await interviews_collection.find({"candidate_name": username}, {"_id": 0}).to_list(length=1000)
+    
+    # Grab the IDs that this specific role has chosen to hide
+    hidden_records = await hidden_sessions_collection.find({"role": role}, {"_id": 0}).to_list(length=1000)
+    hidden_ids = {record["interview_id"] for record in hidden_records}
     
     result = []
     for i in interviews:
-        report_exists = db.query(ReportDB).filter(ReportDB.interview_id == i.id).first() is not None
+        # If this role hid this session, skip it
+        if i["id"] in hidden_ids:
+            continue
+            
+        report_exists = await reports_collection.find_one({"interview_id": i["id"]}) is not None
         
         result.append({
-            "id": i.id, 
-            "target_role": i.target_role,
-            "created_at": i.created_at.isoformat() if getattr(i, 'created_at', None) else "Unknown",
+            "id": i["id"], 
+            "target_role": i["target_role"],
+            "created_at": i.get("created_at", datetime.now(timezone.utc).isoformat()),
             "is_completed": report_exists
         })
     return result
 
+@app.delete("/api/interviews/{interview_id}")
+async def delete_interview(interview_id: str, role: str = "candidate"):
+    # Simply log that this role wants this interview ID hidden from them
+    existing_hidden = await hidden_sessions_collection.find_one({
+        "interview_id": interview_id,
+        "role": role
+    })
+    
+    if not existing_hidden:
+        await hidden_sessions_collection.insert_one({"interview_id": interview_id, "role": role})
+        
+    return {"message": f"Interview session hidden for {role} successfully"}
+
+@app.delete("/api/candidates/{username}")
+async def delete_candidate(username: str):
+    db_candidate = await candidates_collection.find_one({"username": username})
+    if not db_candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    
+    # Hard Delete everything for the candidate if requested by Recruiter
+    await reports_collection.delete_many({"candidate_name": username})
+    await interviews_collection.delete_many({"candidate_name": username})
+    await candidates_collection.delete_one({"username": username})
+    
+    return {"message": "Candidate and all associated data deleted successfully"}
+
 # ==========================================
-# CORE APP ENDPOINTS
+# GEMINI GENERATION & EVALUATION
 # ==========================================
 
 @app.get("/api/generate-questions")
 async def generate_questions(role: str):
-    prompt = f'You are an expert interviewer. Generate exactly 10 common behavioral and technical interview questions for a candidate applying for a "{role}" role. Return ONLY the questions, one per line. Do NOT include numbers, bullet points, markdown, or introductory text.'
+    prompt = f'You are an expert interviewer. Generate exactly 5 common behavioral and technical interview questions for a candidate applying for a "{role}" role. Return ONLY the questions, one per line. Do NOT include numbers, bullet points, markdown, or introductory text.'
     try:
         response = model.generate_content(prompt)
         questions = [q.strip() for q in response.text.strip().split('\n') if q.strip()]
@@ -209,37 +283,8 @@ async def polish_questions(payload: PolishRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/interviews")
-async def create_interview(setup: InterviewSetup, db: Session = Depends(get_db)):
-    interview_id = str(uuid.uuid4())[:8]  
-    
-    new_session = InterviewSessionDB(
-        id=interview_id,
-        candidate_name=setup.candidate_name,
-        target_role=setup.target_role,
-        questions_json=json.dumps(setup.questions) 
-    )
-    
-    db.add(new_session)
-    db.commit()
-    
-    return {"interview_id": interview_id}
-
-@app.get("/api/interviews/{interview_id}")
-async def get_interview(interview_id: str, db: Session = Depends(get_db)):
-    db_session = db.query(InterviewSessionDB).filter(InterviewSessionDB.id == interview_id).first()
-    
-    if not db_session:
-        raise HTTPException(status_code=404, detail="Interview session not found.")
-    
-    return {
-        "candidate_name": db_session.candidate_name,
-        "target_role": db_session.target_role,
-        "questions": json.loads(db_session.questions_json) 
-    }
-
 @app.post("/api/evaluate")
-async def evaluate_candidate_answer(payload: AnswerPayload, db: Session = Depends(get_db)):
+async def evaluate_candidate_answer(payload: AnswerPayload):
     if len(payload.user_answer.strip()) < 10:
         return {
             "score": 0, 
@@ -255,7 +300,7 @@ async def evaluate_candidate_answer(payload: AnswerPayload, db: Session = Depend
     Evaluate the candidate's spoken answer out of 100 based on its relevance, clarity, completeness, and professionalism. 
     Do NOT strictly compare it to a single "ideal" answer. Instead, assess the merit, logical flow, and quality of the candidate's own unique response.
     
-    You MUST return your response as a valid JSON object with exact keys "score" (a number), "feedback" (a very short string), and "idealAnswer" (a string).
+    You MUST return your response as a valid JSON object with exact keys "score" (a number), "feedback" (a short string), and "idealAnswer" (a string).
     
     CRITICAL INSTRUCTION: You MUST ALWAYS provide the "idealAnswer" field. It should contain a highly effective, alternative way to answer the question to serve as a helpful example for the candidate. Do not include markdown code blocks.
     """
@@ -263,6 +308,7 @@ async def evaluate_candidate_answer(payload: AnswerPayload, db: Session = Depend
     try:
         response = model.generate_content(prompt)
         text_result = response.text.replace('```json', '').replace('```', '').strip()
+        import json
         parsed_data = json.loads(text_result)
         
         return {
@@ -273,67 +319,57 @@ async def evaluate_candidate_answer(payload: AnswerPayload, db: Session = Depend
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ==========================================
+# INTERVIEW & REPORT CREATION
+# ==========================================
+
+@app.post("/api/interviews")
+async def create_interview(setup: InterviewSetup):
+    interview_id = str(uuid.uuid4())[:8]  
+    
+    await interviews_collection.insert_one({
+        "id": interview_id,
+        "candidate_name": setup.candidate_name,
+        "target_role": setup.target_role,
+        "questions": setup.questions,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+    
+    return {"interview_id": interview_id}
+
+@app.get("/api/interviews/{interview_id}")
+async def get_interview(interview_id: str):
+    db_session = await interviews_collection.find_one({"id": interview_id}, {"_id": 0})
+    
+    if not db_session:
+        raise HTTPException(status_code=404, detail="Interview session not found.")
+    
+    return {
+        "candidate_name": db_session["candidate_name"],
+        "target_role": db_session["target_role"],
+        "questions": db_session["questions"]
+    }
+
 @app.post("/api/reports")
-async def save_interview_report(payload: ReportPayload, db: Session = Depends(get_db)):
-    existing_report = db.query(ReportDB).filter(ReportDB.interview_id == payload.interview_id).first()
+async def save_interview_report(payload: ReportPayload):
+    existing_report = await reports_collection.find_one({"interview_id": payload.interview_id})
     if existing_report:
         raise HTTPException(status_code=400, detail="Report already exists for this interview.")
     
-    new_report = ReportDB(
-        interview_id=payload.interview_id,
-        candidate_name=payload.candidate_name,
-        duration=payload.duration,
-        metrics_json=json.dumps(payload.metrics.dict()),
-        details_json=json.dumps(payload.report.dict())
-    )
-    db.add(new_report)
-    db.commit()
+    # Store directly as a dictionary! No JSON stringification needed in MongoDB.
+    await reports_collection.insert_one(payload.dict())
+    
     return {"message": "Report saved successfully"}
 
 @app.get("/api/reports/{interview_id}")
-async def get_interview_report(interview_id: str, db: Session = Depends(get_db)):
-    db_report = db.query(ReportDB).filter(ReportDB.interview_id == interview_id).first()
+async def get_interview_report(interview_id: str):
+    # Retrieve the report, specifically ignoring the MongoDB unique `_id` field
+    db_report = await reports_collection.find_one({"interview_id": interview_id}, {"_id": 0})
     
     if not db_report:
         raise HTTPException(status_code=404, detail="Report not found or interview incomplete.")
         
-    return {
-        "interview_id": db_report.interview_id,
-        "candidate_name": db_report.candidate_name, 
-        "duration": db_report.duration,
-        "metrics": json.loads(db_report.metrics_json),
-        "report": json.loads(db_report.details_json)
-    }
-# ==========================================
-# DELETION ENDPOINTS
-# ==========================================
-
-@app.delete("/api/candidates/{username}")
-async def delete_candidate(username: str, db: Session = Depends(get_db)):
-    db_candidate = db.query(CandidateDB).filter(CandidateDB.username == username).first()
-    if not db_candidate:
-        raise HTTPException(status_code=404, detail="Candidate not found")
-    
-    # Safely cascade deletion for related reports and interviews
-    db.query(ReportDB).filter(ReportDB.candidate_name == username).delete()
-    db.query(InterviewSessionDB).filter(InterviewSessionDB.candidate_name == username).delete()
-    
-    db.delete(db_candidate)
-    db.commit()
-    return {"message": "Candidate and all associated data deleted successfully"}
-
-@app.delete("/api/interviews/{interview_id}")
-async def delete_interview(interview_id: str, db: Session = Depends(get_db)):
-    # Delete report first to avoid orphaned data
-    db.query(ReportDB).filter(ReportDB.interview_id == interview_id).delete()
-    
-    db_interview = db.query(InterviewSessionDB).filter(InterviewSessionDB.id == interview_id).first()
-    if not db_interview:
-        raise HTTPException(status_code=404, detail="Interview not found")
-    
-    db.delete(db_interview)
-    db.commit()
-    return {"message": "Interview and its report deleted successfully"}
+    return db_report
 
 if __name__ == "__main__":
     import uvicorn

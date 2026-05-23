@@ -1,44 +1,46 @@
-from sqlalchemy import create_engine, Column, String, Integer, DateTime
-from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy.sql import func
+import os
+import sys
+from motor.motor_asyncio import AsyncIOMotorClient
+from dotenv import load_dotenv
 
-# Create the SQLite engine
-engine = create_engine("sqlite:///./interview_app.db", connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+# Load environment variables. In a deployed environment, these are usually set in the hosting provider's dashboard.
+load_dotenv(override=True)
 
-# --- EXISTING TABLE WITH NEW TIMESTAMP ---
-class InterviewSessionDB(Base):
-    __tablename__ = "interviews"
-    id = Column(String, primary_key=True, index=True)
-    candidate_name = Column(String)
-    target_role = Column(String)
-    questions_json = Column(String)
-    created_at = Column(DateTime(timezone=True), server_default=func.now()) # <-- NEW COLUMN
+# Use the MONGO_URL from the environment. Fail safely if it's not provided in production.
+MONGO_URL = os.getenv("MONGO_URL")
 
-# --- NEW TABLES FOR AUTHENTICATION ---
-class RecruiterDB(Base):
-    __tablename__ = "recruiters"
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    password_hash = Column(String)
+if not MONGO_URL:
+    print("❌ ERROR: MONGO_URL environment variable is not set.", file=sys.stderr)
+    print("👉 FIX: If running locally, add MONGO_URL=\"mongodb://localhost:27017\" to your .env file.", file=sys.stderr)
+    print("👉 FIX: If deploying, ensure MONGO_URL is set in your deployment environment variables.", file=sys.stderr)
+    # Don't exit immediately during a build phase, but the connection will fail if the app tries to start.
+    MONGO_URL = "mongodb://localhost:27017" # Fallback for local dev if forgotten
 
-class CandidateDB(Base):
-    __tablename__ = "candidates"
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    password_hash = Column(String)
-    # NEW FIELDS
-    email = Column(String)
-    phone = Column(String)
-    role = Column(String, nullable=True)
+# Create Async MongoDB Client
+try:
+    client = AsyncIOMotorClient(MONGO_URL, serverSelectionTimeoutMS=5000)
+except Exception as e:
+     print(f"❌ ERROR: Failed to initialize MongoDB client: {e}", file=sys.stderr)
+     sys.exit(1)
 
+# Select the Database
+db = client.interview_system_db
 
-class ReportDB(Base):
-    __tablename__ = "reports"
-    id = Column(Integer, primary_key=True, index=True)
-    interview_id = Column(String, unique=True, index=True)
-    candidate_name = Column(String)
-    duration = Column(Integer)
-    metrics_json = Column(String)
-    details_json = Column(String)
+# Define Collections (analogous to SQL tables)
+recruiters_collection = db.get_collection("recruiters")
+candidates_collection = db.get_collection("candidates")
+interviews_collection = db.get_collection("interviews")
+reports_collection = db.get_collection("reports")
+hidden_sessions_collection = db.get_collection("hidden_sessions")
+
+# Create unique indexes for robust data integrity
+async def init_db_indexes():
+    try:
+        await recruiters_collection.create_index("username", unique=True)
+        await candidates_collection.create_index("username", unique=True)
+        await interviews_collection.create_index("id", unique=True)
+        await reports_collection.create_index("interview_id", unique=True)
+        print("✅ Database indexes verified successfully.")
+    except Exception as e:
+        print(f"⚠️ WARNING: Failed to create database indexes: {e}")
+        print("This might be due to a connection issue or existing duplicate data.")
