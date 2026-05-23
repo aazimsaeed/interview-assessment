@@ -308,7 +308,7 @@ async def delete_candidate(username: str):
 
 @app.get("/api/generate-questions")
 async def generate_questions(role: str):
-    prompt = f'You are an expert interviewer. Generate exactly 5 common behavioral and technical interview questions for a candidate applying for a "{role}" role. Return ONLY the questions, one per line. Do NOT include numbers, bullet points, markdown, or introductory text.'
+    prompt = f'You are an expert interviewer. Generate exactly 10 common behavioral and technical interview questions for a candidate applying for a "{role}" role. Return ONLY the questions, one per line. Do NOT include numbers, bullet points, markdown, or introductory text.'
     try:
         response = model.generate_content(prompt)
         questions = [q.strip() for q in response.text.strip().split('\n') if q.strip()]
@@ -357,7 +357,7 @@ async def evaluate_candidate_answer(payload: AnswerPayload):
     Evaluate the candidate's spoken answer out of 100 based on its relevance, clarity, completeness, and professionalism. 
     Do NOT strictly compare it to a single "ideal" answer. Instead, assess the merit, logical flow, and quality of the candidate's own unique response.
     
-    You MUST return your response as a valid JSON object with exact keys "score" (a number), "feedback" (a short string), and "idealAnswer" (a string).
+    You MUST return your response as a valid JSON object with exact keys "score" (a number), "feedback" (a very very short string), and "idealAnswer" (a string).
     
     CRITICAL INSTRUCTION: You MUST ALWAYS provide the "idealAnswer" field. It should contain a highly effective, alternative way to answer the question to serve as a helpful example for the candidate. Do not include markdown code blocks.
     """
