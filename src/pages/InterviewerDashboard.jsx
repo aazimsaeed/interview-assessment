@@ -2,53 +2,56 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createSpeechTracker } from '../audio/speechAnalysis';
 
 export default function InterviewerDashboard({ onBack, username, onViewReport }) {
+  // --- NEW: RECRUITER KEY STATE ---
+  const [recruiterKey, setRecruiterKey] = useState("LOADING...");
+  
   const [candidateName, setCandidateName] = useState("");
   const [targetRole, setTargetRole] = useState("");
   const [customQuestions, setCustomQuestions] = useState("");
   
-  // Track the email of the selected candidate to send them the link later
   const [selectedEmail, setSelectedEmail] = useState("");
-  
   const [loading, setLoading] = useState(false);
   const [generatedId, setGeneratedId] = useState(null);
   const [error, setError] = useState("");
-  
   const [candidatesList, setCandidatesList] = useState([]);
 
-  // STATES FOR REPORTS VIEW
   const [reportCandidate, setReportCandidate] = useState(null);
   const [candidateInterviews, setCandidateInterviews] = useState([]);
 
-  // STATE: Controls the overlapping candidate list
   const [showCandidatesDropdown, setShowCandidatesDropdown] = useState(false);
-
-  // Voice Dictation State
   const [isRecording, setIsRecording] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState("");
   const speechTrackerRef = useRef(null);
 
   const API_BASE = "http://localhost:8000";
 
-  // Fetch candidates when dashboard mounts
+  // Fetch Recruiter Key and then fetch Linked Candidates
   useEffect(() => {
-    const fetchCandidates = async () => {
+    const fetchKeyAndCandidates = async () => {
         try {
-            const res = await fetch(`${API_BASE}/api/candidates`);
-            if (res.ok) {
-                const data = await res.json();
-                setCandidatesList(data);
+            // 1. Get the personal key
+            const keyRes = await fetch(`${API_BASE}/api/recruiters/${username}`);
+            if (keyRes.ok) {
+                const keyData = await keyRes.json();
+                setRecruiterKey(keyData.recruiter_key);
+                
+                // 2. Fetch candidates specifically linked to this key
+                const candRes = await fetch(`${API_BASE}/api/candidates?recruiter_key=${keyData.recruiter_key}`);
+                if (candRes.ok) {
+                    const candData = await candRes.json();
+                    setCandidatesList(candData);
+                }
             }
         } catch (err) {
-            console.error("Failed to load candidates:", err);
+            console.error("Failed to load dashboard data:", err);
         }
     };
-    fetchCandidates();
+    fetchKeyAndCandidates();
 
-    // Cleanup microphone if they leave the page
     return () => {
         if (speechTrackerRef.current) speechTrackerRef.current.turnOff();
     };
-  }, []);
+  }, [username]);
 
   const handleGenerate = async () => {
     if (!targetRole) return alert("Please enter a target role first.");
@@ -65,7 +68,6 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
     }
   };
 
-  // Toggle Microphone Recording
   const handleToggleRecording = () => {
     if (isRecording) {
         if (speechTrackerRef.current) speechTrackerRef.current.turnOff();
@@ -81,7 +83,6 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
     }
   };
 
-  // Fix Grammar & Numbering
   const handlePolishGrammar = async () => {
       const textToPolish = customQuestions + (liveTranscript ? '\n' + liveTranscript : '');
       if (!textToPolish.trim()) return alert("Please write or dictate questions first.");
@@ -140,11 +141,10 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
     }
   };
 
-  // Fetch all interviews for a specific candidate
-  const handleViewReportsList = async (username) => {
-      setReportCandidate(username);
+  const handleViewReportsList = async (candidateUsername) => {
+      setReportCandidate(candidateUsername);
       try {
-          const res = await fetch(`${API_BASE}/api/candidates/${username}/interviews`);
+          const res = await fetch(`${API_BASE}/api/candidates/${candidateUsername}/interviews?role=recruiter`);
           if (res.ok) {
               const data = await res.json();
               setCandidateInterviews(data);
@@ -154,13 +154,11 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
       }
   };
 
-  // --- NEW: Trigger App.jsx Navigation for Full Dashboard ---
   const handleFetchFullReport = async (interviewId) => {
       try {
           const res = await fetch(`${API_BASE}/api/reports/${interviewId}`);
           if (res.ok) {
               const data = await res.json();
-              // Immediately pass it up to App.jsx to render full screen
               if(onViewReport) onViewReport(data);
           }
       } catch (err) {
@@ -168,41 +166,35 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
       }
   };
 
-  // Handle Completely Deleting a Candidate
+  const handleDeleteReport = async (interviewId) => {
+      const confirmDelete = window.confirm("Are you sure you want to remove this session from your dashboard?");
+      if (!confirmDelete) return;
+
+      try {
+          const res = await fetch(`${API_BASE}/api/interviews/${interviewId}?role=recruiter`, { method: 'DELETE' });
+          if (res.ok) setCandidateInterviews(prev => prev.filter(inv => inv.id !== interviewId));
+      } catch (err) {
+          console.error("Failed to delete report", err);
+      }
+  };
+
   const handleDeleteCandidate = async (usernameToDelete) => {
       const confirmDelete = window.confirm(`Are you sure you want to completely delete candidate '${usernameToDelete}' and all their interview records? This cannot be undone.`);
       if (!confirmDelete) return;
 
       try {
-          const res = await fetch(`${API_BASE}/api/candidates/${usernameToDelete}`, {
-              method: 'DELETE'
-          });
-          
+          const res = await fetch(`${API_BASE}/api/candidates/${usernameToDelete}`, { method: 'DELETE' });
           if (res.ok) {
-              // Remove them from the list visually
               setCandidatesList(prev => prev.filter(c => c.username !== usernameToDelete));
-              
-              // Clear fields if the recruiter was currently working on them
-              if (candidateName === usernameToDelete) {
-                  setCandidateName("");
-                  setTargetRole("");
-                  setSelectedEmail("");
-              }
-              if (reportCandidate === usernameToDelete) {
-                  setReportCandidate(null);
-                  setCandidateInterviews([]);
-              }
-          } else {
-              alert("Failed to delete candidate.");
+              if (candidateName === usernameToDelete) { setCandidateName(""); setTargetRole(""); setSelectedEmail(""); }
+              if (reportCandidate === usernameToDelete) { setReportCandidate(null); setCandidateInterviews([]); }
           }
       } catch (err) {
-          console.error("Failed to delete candidate", err);
           alert("Error connecting to server to delete candidate.");
       }
   };
 
   if (generatedId) {
-      // Create a formatted email template for the selected candidate
       const mailtoLink = `mailto:${selectedEmail}?subject=Your Interview Link for ${targetRole}&body=Hello ${candidateName},%0D%0A%0D%0APlease log in to the Candidate Portal and use the following Interview ID to begin your assessment:%0D%0A%0D%0AInterview ID: ${generatedId}%0D%0A%0D%0ABest of luck!`;
 
       return (
@@ -214,7 +206,6 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
                       {generatedId}
                   </div>
                   
-                  {/* Send Email Button */}
                   {selectedEmail && (
                       <a href={mailtoLink} className="btn" style={{ width: '100%', marginBottom: '10px', display: 'block', textDecoration: 'none', background: '#38bdf8', color: '#0f172a', fontWeight: 'bold' }}>
                           📧 Send Link via Email
@@ -235,16 +226,25 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
             <button type="button" className="btn" onClick={onBack}>← Back to Home</button>
         </div>
 
-        <p style={{ color: '#94a3b8', marginBottom: '30px' }}>Logged in as: <strong>{username}</strong></p>
+        {/* --- DISPLAY THE RECRUITER KEY --- */}
+        <div style={{ background: '#0f172a', border: '1px solid #38bdf8', padding: '15px 25px', borderRadius: '8px', marginBottom: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+                <p style={{ margin: 0, color: '#94a3b8', fontSize: '14px' }}>Logged in as: <strong>{username}</strong></p>
+                <p style={{ margin: '5px 0 0 0', color: '#f8fafc', fontSize: '14px' }}>Share your personal Key with candidates so they can access your portal.</p>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+                <span style={{ fontSize: '12px', color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '1px' }}>Your Recruiter Key</span>
+                <h2 style={{ margin: '0', color: '#22c55e', letterSpacing: '3px' }}>{recruiterKey}</h2>
+            </div>
+        </div>
+        {/* -------------------------------- */}
+
         {error && <div style={{ color: '#ef4444', marginBottom: '15px', padding: '10px', background: '#451a1e', borderRadius: '6px' }}>{error}</div>}
 
         <div style={{ display: 'flex', gap: '30px', alignItems: 'flex-start' }}>
-            
-            {/* Dynamic View (Create Form OR Report History) on a Full Width Card */}
             <div className="card" style={{ padding: '40px', width: '100%' }}>
                 
                 {reportCandidate ? (
-                    /* VIEW: CANDIDATE INTERVIEW HISTORY LIST */
                     <div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                             <h2 style={{ margin: 0 }}>Interview History: <span style={{ color: '#38bdf8' }}>{reportCandidate}</span></h2>
@@ -261,11 +261,23 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
                                             <div style={{ fontWeight: 'bold', color: '#f8fafc' }}>Target Role: {inv.target_role}</div>
                                             <div style={{ color: '#94a3b8', fontSize: '13px', marginTop: '4px' }}>Date: {new Date(inv.created_at.includes('Z') || inv.created_at.includes('+') ? inv.created_at : inv.created_at + 'Z').toLocaleDateString()}</div>
                                         </div>
-                                        {inv.is_completed ? (
-                                            <button className="btn primary" onClick={() => handleFetchFullReport(inv.id)} style={{ padding: '8px 12px', fontSize: '13px' }}>View Full Report</button>
-                                        ) : (
-                                            <span style={{ color: '#fbbf24', fontSize: '13px', fontWeight: 'bold' }}>Pending...</span>
-                                        )}
+
+                                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                            {inv.is_completed ? (
+                                                <button className="btn primary" onClick={() => handleFetchFullReport(inv.id)} style={{ padding: '8px 12px', fontSize: '13px' }}>View Full Report</button>
+                                            ) : (
+                                                <span style={{ color: '#fbbf24', fontSize: '13px', fontWeight: 'bold', marginRight: '5px' }}>Pending...</span>
+                                            )}
+                                            
+                                            <button 
+                                                className="btn" 
+                                                onClick={() => handleDeleteReport(inv.id)} 
+                                                style={{ padding: '8px', fontSize: '12px', background: '#ef4444', color: '#fff', borderColor: '#b91c1c' }} 
+                                                title="Remove this session"
+                                            >
+                                                🗑️
+                                            </button>
+                                        </div>
                                     </li>
                                 ))}
                             </ul>
@@ -273,23 +285,20 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
                     </div>
 
                 ) : (
-                    /* VIEW: CREATE NEW INTERVIEW FORM (Default) */
                     <div style={{ position: 'relative' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                             <h2 style={{ margin: 0 }}>Create New Interview</h2>
                             
-                            {/* Button to toggle the overlapping list */}
                             <button 
                                 type="button" 
                                 className="btn"
                                 onClick={() => setShowCandidatesDropdown(!showCandidatesDropdown)}
                                 style={{ background: showCandidatesDropdown ? '#38bdf8' : '#1e293b', color: showCandidatesDropdown ? '#0f172a' : '#f8fafc', fontWeight: 'bold' }}
                             >
-                                {showCandidatesDropdown ? "✖ Close Candidates" : "📋 Registered Candidates"}
+                                {showCandidatesDropdown ? "✖ Close Candidates" : "📋 Linked Candidates"}
                             </button>
                         </div>
 
-                        {/* Overlapping Absolute Positioned List */}
                         {showCandidatesDropdown && (
                             <div style={{
                                 position: 'absolute',
@@ -307,7 +316,7 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
                             }}>
                                 <h3 style={{ marginTop: 0, color: '#f8fafc', marginBottom: '15px' }}>Select a Candidate</h3>
                                 {candidatesList.length === 0 ? (
-                                    <p style={{ color: '#94a3b8' }}>No candidates registered yet.</p>
+                                    <p style={{ color: '#94a3b8' }}>No candidates have linked their account with your Key yet.</p>
                                 ) : (
                                     <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                                         {candidatesList.map((cand, idx) => (
@@ -329,7 +338,6 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
                                                     <span>📞 {cand.phone}</span>
                                                 </div>
                                                 
-                                                {/* Candidate Control Buttons */}
                                                 <div style={{ display: 'flex', gap: '8px', marginTop: '15px' }}>
                                                     <button 
                                                         type="button"
@@ -357,7 +365,6 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
                                                         📊 Reports
                                                     </button>
                                                     
-                                                    {/* Delete Candidate Button */}
                                                     <button 
                                                         type="button"
                                                         className="btn" 
@@ -413,7 +420,6 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
                                     onChange={e => setCustomQuestions(e.target.value)} 
                                     placeholder="1. Tell me about yourself...&#10;2. What are your strengths..."
                                 />
-                                {isRecording && <span style={{ fontSize: '12px', color: '#ef4444', marginTop: '5px', display: 'block' }}>Recording active. You cannot type while speaking. Click Stop when finished.</span>}
                             </div>
 
                             <button type="submit" className="btn primary" disabled={loading || isRecording} style={{ padding: '15px', fontSize: '1.1rem' }}>

@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
 
 export default function SetupPage({ onStart, onBack, username, onViewReport }) {
+  // --- NEW: LINKING STATE ---
+  const [isLinked, setIsLinked] = useState(null); // null = loading
+  const [recruiterName, setRecruiterName] = useState("");
+  const [keyInput, setKeyInput] = useState("");
+
   const [interviewId, setInterviewId] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -8,17 +13,60 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
 
   const API_BASE = "http://localhost:8000";
 
-  // Auto-fetch candidate's pending interviews on load
+  // Check link status on load
   useEffect(() => {
     if (username) {
-      fetch(`${API_BASE}/api/candidates/${username}/interviews`)
+      fetch(`${API_BASE}/api/candidates/${username}/link_status`)
+        .then(res => res.json())
+        .then(data => {
+            if (data.is_linked) {
+                setRecruiterName(data.recruiter_name);
+                setIsLinked(true);
+            } else {
+                setIsLinked(false);
+            }
+        })
+        .catch(err => console.error("Failed to check link status", err));
+    }
+  }, [username]);
+
+  // Fetch interviews ONLY IF linked
+  useEffect(() => {
+    if (username && isLinked) {
+      fetch(`${API_BASE}/api/candidates/${username}/interviews?role=candidate`)
         .then(res => res.json())
         .then(data => {
           if (Array.isArray(data)) setAssignedInterviews(data);
         })
         .catch(err => console.error("Failed to fetch interviews", err));
     }
-  }, [username]);
+  }, [username, isLinked]);
+
+  // --- NEW: Process linking submission ---
+  const handleLinkKey = async (e) => {
+      e.preventDefault();
+      if (!keyInput.trim()) return setError("Please enter a key.");
+      setLoading(true);
+      setError("");
+
+      try {
+          const res = await fetch(`${API_BASE}/api/candidates/link`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ username: username, recruiter_key: keyInput })
+          });
+          const data = await res.json();
+
+          if (!res.ok) throw new Error(data.detail);
+
+          setRecruiterName(data.recruiter_name);
+          setIsLinked(true);
+      } catch (err) {
+          setError(err.message);
+      } finally {
+          setLoading(false);
+      }
+  };
 
   const handleJoin = async (idToJoin) => {
     setLoading(true);
@@ -45,18 +93,16 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
     }
   };
 
-  // --- NEW: Handle Interview Deletion ---
   const handleDelete = async (idToDelete) => {
-    const confirmDelete = window.confirm("Are you sure you want to delete this assessment? This cannot be undone.");
+    const confirmDelete = window.confirm("Are you sure you want to remove this assessment? It will no longer appear on your dashboard.");
     if (!confirmDelete) return;
     
     try {
-      const response = await fetch(`${API_BASE}/api/interviews/${idToDelete}`, {
+      const response = await fetch(`${API_BASE}/api/interviews/${idToDelete}?role=candidate`, {
         method: 'DELETE'
       });
       
       if (response.ok) {
-        // Remove it from the local UI list immediately
         setAssignedInterviews(prev => prev.filter(inv => inv.id !== idToDelete));
       } else {
         const data = await response.json();
@@ -73,37 +119,66 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
     handleJoin(interviewId);
   };
 
-  // Helper function to format the timestamp
   const formatDate = (dateString) => {
     if (!dateString || dateString === "Unknown") return "Date Unknown";
-    
-    // Fix: Append 'Z' to treat the naive SQLite datetime as UTC 
     const safeDateString = dateString.endsWith('Z') || dateString.includes('+') ? dateString : dateString + 'Z';
-    
     const options = { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
     return new Date(safeDateString).toLocaleDateString(undefined, options);
   };
 
+  if (isLinked === null) {
+      return <div className="shell flex-center"><h2>Loading portal...</h2></div>;
+  }
+
+  // --- GATEKEEPER VIEW: IF NOT LINKED YET ---
+  if (isLinked === false) {
+      return (
+        <div className="shell" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', padding: '20px' }}>
+            <div className="card" style={{ padding: '40px', maxWidth: '500px', width: '100%', textAlign: 'center' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                    <h1 style={{ margin: 0 }}>Connect Account</h1>
+                    <button type="button" className="btn" onClick={onBack} style={{ background: '#1e293b', color: '#f8fafc', borderColor: '#334155', fontWeight: 'bold' }}>🚪 Logout</button>
+                </div>
+                
+                <p style={{ color: '#94a3b8', marginBottom: '30px' }}>
+                    Welcome, <strong>{username}</strong>. To access your assessments, please enter the personal 6-character Key provided by your recruiter.
+                </p>
+
+                {error && <div style={{ color: '#ef4444', marginBottom: '15px', padding: '10px', background: '#451a1e', borderRadius: '6px' }}>{error}</div>}
+
+                <form onSubmit={handleLinkKey} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                    <input 
+                        type="text" 
+                        className="input" 
+                        placeholder="e.g. A7B29F"
+                        value={keyInput} 
+                        onChange={e => setKeyInput(e.target.value.toUpperCase())} 
+                        style={{ fontSize: '1.2rem', textAlign: 'center', letterSpacing: '3px' }}
+                        maxLength={6}
+                    />
+                    <button type="submit" className="btn primary" disabled={loading} style={{ padding: '15px' }}>
+                        {loading ? "Verifying..." : "Connect to Recruiter"}
+                    </button>
+                </form>
+            </div>
+        </div>
+      );
+  }
+
+  // --- MAIN PORTAL: IF LINKED SUCCESSFULLY ---
   return (
     <div className="shell" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', padding: '20px' }}>
       <div className="card" style={{ padding: '40px', maxWidth: '600px', width: '100%' }}>
         
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
           <h1 style={{ margin: 0 }}>Candidate Portal</h1>
-          
-          <button 
-            type="button" 
-            className="btn" 
-            onClick={onBack} 
-            style={{ background: '#1e293b', color: '#f8fafc', borderColor: '#334155', fontWeight: 'bold' }}
-          >
-            🚪 Logout
-          </button>
+          <button type="button" className="btn" onClick={onBack} style={{ background: '#1e293b', color: '#f8fafc', borderColor: '#334155', fontWeight: 'bold' }}>🚪 Logout</button>
         </div>
 
-        <p style={{ color: '#94a3b8', marginBottom: '20px' }}>
-          Welcome, <strong>{username}</strong>. Choose an interview session below to begin.
-        </p>
+        <div style={{ marginBottom: '20px', background: 'rgba(56, 189, 248, 0.1)', padding: '15px', borderRadius: '8px', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+            <p style={{ color: '#f8fafc', margin: '0 0 5px 0' }}>Welcome, <strong>{username}</strong>.</p>
+            <p style={{ color: '#38bdf8', margin: 0, fontSize: '14px' }}>✅ Securely connected to Recruiter: <strong>{recruiterName}</strong></p>
+        </div>
 
         {error && (
            <div style={{ color: '#ef4444', marginBottom: '15px', padding: '10px', background: '#451a1e', borderRadius: '6px' }}>
@@ -111,7 +186,6 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
            </div>
         )}
 
-        {/* Dynamic Assigned Interviews List */}
         {assignedInterviews.length > 0 ? (
           <div style={{ marginBottom: '30px' }}>
             <h3 style={{ color: '#e6edf3', marginBottom: '10px' }}>Your Assigned Interviews</h3>
@@ -158,13 +232,12 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
                       </button>
                     )}
                     
-                    {/* NEW: Delete Button */}
                     <button 
                         className="btn" 
                         disabled={loading} 
                         onClick={() => handleDelete(inv.id)}
                         style={{ padding: '12px', background: '#ef4444', color: '#fff', borderColor: '#b91c1c' }}
-                        title="Delete Assessment"
+                        title="Remove Assessment"
                     >
                       🗑️
                     </button>
@@ -182,7 +255,6 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
 
         <hr style={{ borderColor: '#1e293b', margin: '20px 0' }} />
 
-        {/* Manual Entry Fallback */}
         <h3 style={{ color: '#9fb0c3', marginBottom: '10px', fontSize: '0.9rem' }}>Or enter an Interview ID manually:</h3>
         <form onSubmit={handleManualSubmit} style={{ display: 'flex', gap: '10px' }}>
           <input 

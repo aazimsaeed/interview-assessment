@@ -29,15 +29,15 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        # 1. Force a quick connection test on startup. This is crucial for deployment.
+        # Force a quick connection test on startup
         print("⏳ Attempting to connect to MongoDB...")
         await client.server_info()
         print("✅ Successfully connected to MongoDB!")
         
-        # 2. Initialize DB indexes
+        # Initialize DB indexes
         await init_db_indexes()
         
-        yield # App runs here
+        yield 
         
     except Exception as e:
         print(f"\n❌ APPLICATION STARTUP FAILED: MongoDB Connection Error.")
@@ -52,7 +52,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 # --- CORS Configuration for Deployment ---
-# In production, you should restrict this to your actual frontend domain instead of "*"
 FRONTEND_URL = os.getenv("FRONTEND_URL", "*") 
 
 app.add_middleware(
@@ -67,7 +66,7 @@ app.add_middleware(
 model = genai.GenerativeModel('gemini-2.5-flash')
 
 # ==========================================
-# PYDANTIC SCHEMAS (Data Validation)
+# PYDANTIC SCHEMAS
 # ==========================================
 class InterviewSetup(BaseModel):
     candidate_name: str
@@ -93,6 +92,11 @@ class CandidateRegister(BaseModel):
 class RoleUpdate(BaseModel):
     username: str
     role: str
+
+# Schema for linking candidates to recruiters
+class LinkPayload(BaseModel):
+    username: str
+    recruiter_key: str
 
 class PolishRequest(BaseModel):
     raw_text: str
@@ -123,7 +127,7 @@ def hash_password(password: str):
     return hashlib.sha256(password.encode()).hexdigest()
 
 # ==========================================
-# AUTHENTICATION ENDPOINTS
+# AUTHENTICATION & KEY ENDPOINTS
 # ==========================================
 
 @app.post("/api/recruiters/register")
@@ -132,9 +136,13 @@ async def register_recruiter(user: UserAuth):
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already exists")
     
+    # Generate a random 6-character uppercase key
+    recruiter_key = str(uuid.uuid4())[:6].upper()
+    
     await recruiters_collection.insert_one({
         "username": user.username, 
-        "password_hash": hash_password(user.password)
+        "password_hash": hash_password(user.password),
+        "recruiter_key": recruiter_key
     })
     return {"message": "Recruiter registered successfully"}
 
@@ -144,6 +152,21 @@ async def login_recruiter(user: UserAuth):
     if not db_user or db_user["password_hash"] != hash_password(user.password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     return {"username": db_user["username"], "role": "recruiter"}
+
+# Fetch Recruiter Key securely for the Dashboard
+@app.get("/api/recruiters/{username}")
+async def get_recruiter_details(username: str):
+    recruiter = await recruiters_collection.find_one({"username": username})
+    if not recruiter:
+        raise HTTPException(status_code=404, detail="Recruiter not found")
+    
+    # Fallback to generate key for older accounts created before this update
+    key = recruiter.get("recruiter_key")
+    if not key:
+        key = str(uuid.uuid4())[:6].upper()
+        await recruiters_collection.update_one({"username": username}, {"$set": {"recruiter_key": key}})
+        
+    return {"recruiter_key": key}
 
 @app.post("/api/candidates/register")
 async def register_candidate(user: CandidateRegister):
@@ -156,7 +179,9 @@ async def register_candidate(user: CandidateRegister):
         "password_hash": hash_password(user.password),
         "email": user.email,
         "phone": user.phone,
-        "role": user.role 
+        "role": user.role,
+        "linked_recruiter": None,
+        "recruiter_name": None
     })
     return {"message": "Candidate registered successfully"}
 
@@ -177,9 +202,41 @@ async def set_candidate_role(payload: RoleUpdate):
         raise HTTPException(status_code=404, detail="Candidate not found")
     return {"message": "Role saved successfully"}
 
+# Fetch Candidate Link Status for Setup Portal
+@app.get("/api/candidates/{username}/link_status")
+async def get_candidate_link_status(username: str):
+    candidate = await candidates_collection.find_one({"username": username})
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    
+    return {
+        "is_linked": candidate.get("linked_recruiter") is not None,
+        "recruiter_name": candidate.get("recruiter_name")
+    }
+
+# Endpoint to link candidate via Recruiter Key
+@app.post("/api/candidates/link")
+async def link_candidate_to_recruiter(payload: LinkPayload):
+    recruiter = await recruiters_collection.find_one({"recruiter_key": payload.recruiter_key})
+    if not recruiter:
+        raise HTTPException(status_code=404, detail="Invalid Recruiter Key.")
+        
+    await candidates_collection.update_one(
+        {"username": payload.username},
+        {"$set": {
+            "linked_recruiter": payload.recruiter_key,
+            "recruiter_name": recruiter["username"]
+        }}
+    )
+    return {"recruiter_name": recruiter["username"]}
+
+# Only return candidates linked to a specific key
 @app.get("/api/candidates")
-async def get_all_candidates():
-    cursor = candidates_collection.find({}, {"_id": 0})
+async def get_all_candidates(recruiter_key: str = None):
+    if not recruiter_key:
+        return [] # Do not expose candidates if no key is provided
+        
+    cursor = candidates_collection.find({"linked_recruiter": recruiter_key}, {"_id": 0})
     users = await cursor.to_list(length=1000)
     return [
         {
@@ -318,6 +375,7 @@ async def evaluate_candidate_answer(payload: AnswerPayload):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # ==========================================
 # INTERVIEW & REPORT CREATION
