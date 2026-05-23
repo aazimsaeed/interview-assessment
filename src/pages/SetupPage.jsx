@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from 'react';
 
 export default function SetupPage({ onStart, onBack, username, onViewReport }) {
-  // --- NEW: LINKING STATE ---
-  const [isLinked, setIsLinked] = useState(null); // null = loading
+  const [isLinked, setIsLinked] = useState(null); 
   const [recruiterName, setRecruiterName] = useState("");
+  const [linkedRecruiterKey, setLinkedRecruiterKey] = useState(""); 
   const [keyInput, setKeyInput] = useState("");
+  const [isChangingKey, setIsChangingKey] = useState(false); 
 
   const [interviewId, setInterviewId] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [assignedInterviews, setAssignedInterviews] = useState([]);
+  const [showMenu, setShowMenu] = useState(false); 
 
   const API_BASE = "http://localhost:8000";
 
@@ -21,6 +23,7 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
         .then(data => {
             if (data.is_linked) {
                 setRecruiterName(data.recruiter_name);
+                setLinkedRecruiterKey(data.recruiter_key);
                 setIsLinked(true);
             } else {
                 setIsLinked(false);
@@ -30,19 +33,18 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
     }
   }, [username]);
 
-  // Fetch interviews ONLY IF linked
+  // Fetch interviews ONLY IF linked, and strictly filter by the linkedRecruiterKey
   useEffect(() => {
-    if (username && isLinked) {
-      fetch(`${API_BASE}/api/candidates/${username}/interviews?role=candidate`)
+    if (username && isLinked && linkedRecruiterKey) {
+      fetch(`${API_BASE}/api/candidates/${username}/interviews?role=candidate&recruiter_key=${linkedRecruiterKey}`)
         .then(res => res.json())
         .then(data => {
           if (Array.isArray(data)) setAssignedInterviews(data);
         })
         .catch(err => console.error("Failed to fetch interviews", err));
     }
-  }, [username, isLinked]);
+  }, [username, isLinked, linkedRecruiterKey]);
 
-  // --- NEW: Process linking submission ---
   const handleLinkKey = async (e) => {
       e.preventDefault();
       if (!keyInput.trim()) return setError("Please enter a key.");
@@ -59,8 +61,14 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
 
           if (!res.ok) throw new Error(data.detail);
 
+          // Clear old data instantly to prevent ghosting
+          setAssignedInterviews([]);
+          
           setRecruiterName(data.recruiter_name);
+          setLinkedRecruiterKey(keyInput);
           setIsLinked(true);
+          setIsChangingKey(false); 
+          setKeyInput("");
       } catch (err) {
           setError(err.message);
       } finally {
@@ -98,32 +106,31 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
     if (!confirmDelete) return;
     
     try {
-      const response = await fetch(`${API_BASE}/api/interviews/${idToDelete}?role=candidate`, {
-        method: 'DELETE'
-      });
-      
-      if (response.ok) {
-        setAssignedInterviews(prev => prev.filter(inv => inv.id !== idToDelete));
-      } else {
-        const data = await response.json();
-        setError(data.detail || "Failed to delete interview.");
-      }
+      const response = await fetch(`${API_BASE}/api/interviews/${idToDelete}?role=candidate`, { method: 'DELETE' });
+      if (response.ok) setAssignedInterviews(prev => prev.filter(inv => inv.id !== idToDelete));
     } catch (err) {
       setError(err.message);
     }
+  };
+
+  const handleDeleteAccount = async () => {
+      if (!window.confirm("Are you sure you want to permanently delete your account and all interview records? This action cannot be undone.")) return;
+      try {
+          const res = await fetch(`${API_BASE}/api/candidates/${username}`, { method: 'DELETE' });
+          if (res.ok) {
+              onBack(); // Triggers logout
+          } else {
+              alert("Failed to delete account.");
+          }
+      } catch (err) {
+          alert("Error deleting account.");
+      }
   };
 
   const handleManualSubmit = (e) => {
     e.preventDefault();
     if (!interviewId.trim()) return setError("Please enter an ID");
     handleJoin(interviewId);
-  };
-
-  const formatDate = (dateString) => {
-    if (!dateString || dateString === "Unknown") return "Date Unknown";
-    const safeDateString = dateString.endsWith('Z') || dateString.includes('+') ? dateString : dateString + 'Z';
-    const options = { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
-    return new Date(safeDateString).toLocaleDateString(undefined, options);
   };
 
   if (isLinked === null) {
@@ -137,7 +144,18 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
             <div className="card" style={{ padding: '40px', maxWidth: '500px', width: '100%', textAlign: 'center' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                     <h1 style={{ margin: 0 }}>Connect Account</h1>
-                    <button type="button" className="btn" onClick={onBack} style={{ background: '#1e293b', color: '#f8fafc', borderColor: '#334155', fontWeight: 'bold' }}>🚪 Logout</button>
+                    
+                    {/* THREE DOTS MENU */}
+                    <div style={{ position: 'relative' }}>
+                        <button className="btn" onClick={() => setShowMenu(!showMenu)} style={{ padding: '10px 15px', fontSize: '1.2rem' }}>⋮</button>
+                        {showMenu && (
+                            <div style={{ position: 'absolute', right: 0, top: '45px', background: '#1e293b', border: '1px solid #334155', borderRadius: '8px', padding: '10px', zIndex: 100, display: 'flex', flexDirection: 'column', gap: '5px', minWidth: '160px', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }}>
+                                <button className="btn" onClick={onBack} style={{ width: '100%', textAlign: 'left', border: 'none', background: 'transparent', color: '#f8fafc' }}>🚪 Logout</button>
+                                <button className="btn" onClick={handleDeleteAccount} style={{ width: '100%', textAlign: 'left', border: 'none', background: 'transparent', color: '#ef4444' }}>🗑️ Delete Account</button>
+                            </div>
+                        )}
+                    </div>
+
                 </div>
                 
                 <p style={{ color: '#94a3b8', marginBottom: '30px' }}>
@@ -172,19 +190,40 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
         
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
           <h1 style={{ margin: 0 }}>Candidate Portal</h1>
-          <button type="button" className="btn" onClick={onBack} style={{ background: '#1e293b', color: '#f8fafc', borderColor: '#334155', fontWeight: 'bold' }}>🚪 Logout</button>
+          
+          {/* THREE DOTS MENU */}
+          <div style={{ position: 'relative' }}>
+              <button className="btn" onClick={() => setShowMenu(!showMenu)} style={{ padding: '10px 15px', fontSize: '1.2rem' }}>⋮</button>
+              {showMenu && (
+                  <div style={{ position: 'absolute', right: 0, top: '45px', background: '#1e293b', border: '1px solid #334155', borderRadius: '8px', padding: '10px', zIndex: 100, display: 'flex', flexDirection: 'column', gap: '5px', minWidth: '160px', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }}>
+                      <button className="btn" onClick={onBack} style={{ width: '100%', textAlign: 'left', border: 'none', background: 'transparent', color: '#f8fafc' }}>🚪 Logout</button>
+                      <button className="btn" onClick={handleDeleteAccount} style={{ width: '100%', textAlign: 'left', border: 'none', background: 'transparent', color: '#ef4444' }}>🗑️ Delete Account</button>
+                  </div>
+              )}
+          </div>
         </div>
 
-        <div style={{ marginBottom: '20px', background: 'rgba(56, 189, 248, 0.1)', padding: '15px', borderRadius: '8px', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
-            <p style={{ color: '#f8fafc', margin: '0 0 5px 0' }}>Welcome, <strong>{username}</strong>.</p>
-            <p style={{ color: '#38bdf8', margin: 0, fontSize: '14px' }}>✅ Securely connected to Recruiter: <strong>{recruiterName}</strong></p>
-        </div>
-
-        {error && (
-           <div style={{ color: '#ef4444', marginBottom: '15px', padding: '10px', background: '#451a1e', borderRadius: '6px' }}>
-             {error}
-           </div>
+        {/* Change Recruiter UI Segment */}
+        {!isChangingKey ? (
+            <div style={{ marginBottom: '20px', background: 'rgba(56, 189, 248, 0.1)', padding: '15px', borderRadius: '8px', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+                <p style={{ color: '#f8fafc', margin: '0 0 5px 0' }}>Welcome, <strong>{username}</strong>.</p>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <p style={{ color: '#38bdf8', margin: 0, fontSize: '14px' }}>✅ Connected to Recruiter: <strong>{recruiterName}</strong></p>
+                    <button className="btn" onClick={() => setIsChangingKey(true)} style={{ padding: '6px 12px', fontSize: '12px', background: '#1e293b', color: '#f8fafc' }}>Change Recruiter</button>
+                </div>
+            </div>
+        ) : (
+            <div style={{ marginBottom: '20px', background: '#0f172a', padding: '20px', borderRadius: '8px', border: '1px solid #1e293b' }}>
+                <h3 style={{ margin: '0 0 10px 0', color: '#f8fafc' }}>Connect to a New Recruiter</h3>
+                <form onSubmit={handleLinkKey} style={{ display: 'flex', gap: '10px' }}>
+                    <input type="text" className="input" placeholder="New Key (e.g. A7B29F)" value={keyInput} onChange={e => setKeyInput(e.target.value.toUpperCase())} maxLength={6} style={{ flex: 1, letterSpacing: '2px' }} />
+                    <button type="submit" className="btn primary" disabled={loading} style={{ padding: '10px 20px' }}>Connect</button>
+                    <button type="button" className="btn" onClick={() => setIsChangingKey(false)} style={{ background: '#1e293b', color: '#94a3b8' }}>Cancel</button>
+                </form>
+            </div>
         )}
+
+        {error && <div style={{ color: '#ef4444', marginBottom: '15px', padding: '10px', background: '#451a1e', borderRadius: '6px' }}>{error}</div>}
 
         {assignedInterviews.length > 0 ? (
           <div style={{ marginBottom: '30px' }}>
@@ -197,7 +236,7 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
                       Assessment {index + 1}: {inv.target_role}
                     </div>
                     <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: '6px' }}>
-                      <strong>Created:</strong> {formatDate(inv.created_at)}
+                      <strong>Created:</strong> {new Date(inv.created_at).toLocaleDateString()}
                     </div>
                     <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '2px' }}>
                       <strong>Session ID:</strong> {inv.id}
@@ -242,14 +281,13 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
                       🗑️
                     </button>
                   </div>
-
                 </li>
               ))}
             </ul>
           </div>
         ) : (
           <div style={{ background: '#0f172a', padding: '20px', borderRadius: '8px', textAlign: 'center', marginBottom: '30px', border: '1px solid #1e293b' }}>
-            <p style={{ color: '#94a3b8', margin: 0 }}>No pending interviews assigned to you yet.</p>
+            <p style={{ color: '#94a3b8', margin: 0 }}>No pending interviews assigned by this recruiter.</p>
           </div>
         )}
 
@@ -257,17 +295,8 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
 
         <h3 style={{ color: '#9fb0c3', marginBottom: '10px', fontSize: '0.9rem' }}>Or enter an Interview ID manually:</h3>
         <form onSubmit={handleManualSubmit} style={{ display: 'flex', gap: '10px' }}>
-          <input 
-              type="text" 
-              className="input" 
-              placeholder="e.g. 8f7a9c2b"
-              value={interviewId} 
-              onChange={e => setInterviewId(e.target.value)} 
-              style={{ flex: 1 }}
-          />
-          <button type="submit" className="btn" disabled={loading} style={{ padding: '12px 20px' }}>
-            {loading ? "..." : "Join"}
-          </button>
+          <input type="text" className="input" placeholder="e.g. 8f7a9c2b" value={interviewId} onChange={e => setInterviewId(e.target.value)} style={{ flex: 1 }} />
+          <button type="submit" className="btn" disabled={loading} style={{ padding: '12px 20px' }}>{loading ? "..." : "Join"}</button>
         </form>
 
       </div>

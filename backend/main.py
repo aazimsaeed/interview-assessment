@@ -29,24 +29,16 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        # Force a quick connection test on startup
         print("⏳ Attempting to connect to MongoDB...")
         await client.server_info()
         print("✅ Successfully connected to MongoDB!")
-        
-        # Initialize DB indexes
         await init_db_indexes()
-        
         yield 
-        
     except Exception as e:
         print(f"\n❌ APPLICATION STARTUP FAILED: MongoDB Connection Error.")
         print(f"Details: {e}\n")
-        print("👉 FIX: Ensure MONGO_URL environment variable is correct.")
-        print("👉 FIX: If using MongoDB Atlas, check that your deployment's IP is whitelisted.\n")
         raise e
     finally:
-        # Close connection on shutdown
         client.close()
 
 app = FastAPI(lifespan=lifespan)
@@ -72,6 +64,7 @@ class InterviewSetup(BaseModel):
     candidate_name: str
     target_role: str
     questions: List[str]
+    recruiter_key: str # Associates interview strictly with creator
 
 class AnswerPayload(BaseModel):
     interview_id: str
@@ -93,7 +86,6 @@ class RoleUpdate(BaseModel):
     username: str
     role: str
 
-# Schema for linking candidates to recruiters
 class LinkPayload(BaseModel):
     username: str
     recruiter_key: str
@@ -122,7 +114,6 @@ class ReportPayload(BaseModel):
     metrics: ReportMetrics
     report: ReportDetails
 
-# PASSWORD HASHING HELPER
 def hash_password(password: str):
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -136,9 +127,7 @@ async def register_recruiter(user: UserAuth):
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already exists")
     
-    # Generate a random 6-character uppercase key
     recruiter_key = str(uuid.uuid4())[:6].upper()
-    
     await recruiters_collection.insert_one({
         "username": user.username, 
         "password_hash": hash_password(user.password),
@@ -153,20 +142,34 @@ async def login_recruiter(user: UserAuth):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     return {"username": db_user["username"], "role": "recruiter"}
 
-# Fetch Recruiter Key securely for the Dashboard
 @app.get("/api/recruiters/{username}")
 async def get_recruiter_details(username: str):
     recruiter = await recruiters_collection.find_one({"username": username})
     if not recruiter:
         raise HTTPException(status_code=404, detail="Recruiter not found")
     
-    # Fallback to generate key for older accounts created before this update
     key = recruiter.get("recruiter_key")
     if not key:
         key = str(uuid.uuid4())[:6].upper()
         await recruiters_collection.update_one({"username": username}, {"$set": {"recruiter_key": key}})
         
     return {"recruiter_key": key}
+
+@app.delete("/api/recruiters/{username}")
+async def delete_recruiter(username: str):
+    db_recruiter = await recruiters_collection.find_one({"username": username})
+    if not db_recruiter:
+        raise HTTPException(status_code=404, detail="Recruiter not found")
+    
+    recruiter_key = db_recruiter.get("recruiter_key")
+    if recruiter_key:
+        await candidates_collection.update_many(
+            {"linked_recruiter": recruiter_key},
+            {"$set": {"linked_recruiter": None, "recruiter_name": None}}
+        )
+        
+    await recruiters_collection.delete_one({"username": username})
+    return {"message": "Recruiter account deleted successfully"}
 
 @app.post("/api/candidates/register")
 async def register_candidate(user: CandidateRegister):
@@ -202,7 +205,6 @@ async def set_candidate_role(payload: RoleUpdate):
         raise HTTPException(status_code=404, detail="Candidate not found")
     return {"message": "Role saved successfully"}
 
-# Fetch Candidate Link Status for Setup Portal
 @app.get("/api/candidates/{username}/link_status")
 async def get_candidate_link_status(username: str):
     candidate = await candidates_collection.find_one({"username": username})
@@ -211,10 +213,10 @@ async def get_candidate_link_status(username: str):
     
     return {
         "is_linked": candidate.get("linked_recruiter") is not None,
-        "recruiter_name": candidate.get("recruiter_name")
+        "recruiter_name": candidate.get("recruiter_name"),
+        "recruiter_key": candidate.get("linked_recruiter") 
     }
 
-# Endpoint to link candidate via Recruiter Key
 @app.post("/api/candidates/link")
 async def link_candidate_to_recruiter(payload: LinkPayload):
     recruiter = await recruiters_collection.find_one({"recruiter_key": payload.recruiter_key})
@@ -230,11 +232,10 @@ async def link_candidate_to_recruiter(payload: LinkPayload):
     )
     return {"recruiter_name": recruiter["username"]}
 
-# Only return candidates linked to a specific key
 @app.get("/api/candidates")
 async def get_all_candidates(recruiter_key: str = None):
     if not recruiter_key:
-        return [] # Do not expose candidates if no key is provided
+        return [] 
         
     cursor = candidates_collection.find({"linked_recruiter": recruiter_key}, {"_id": 0})
     users = await cursor.to_list(length=1000)
@@ -251,23 +252,24 @@ async def get_all_candidates(recruiter_key: str = None):
 # FETCH & DELETE INTERVIEW ENDPOINTS
 # ==========================================
 
+# 1. Fetches specific candidate interviews (used by SetupPage & old dashboard logic)
 @app.get("/api/candidates/{username}/interviews")
-async def get_candidate_interviews(username: str, role: str = "candidate"):
-    # Find all interviews for candidate
-    interviews = await interviews_collection.find({"candidate_name": username}, {"_id": 0}).to_list(length=1000)
+async def get_candidate_interviews(username: str, role: str = "candidate", recruiter_key: str = None):
+    query = {"candidate_name": username}
+    # Only return sessions explicitly tied to the currently linked recruiter
+    if recruiter_key:
+        query["recruiter_key"] = recruiter_key
+
+    interviews = await interviews_collection.find(query, {"_id": 0}).to_list(length=1000)
     
-    # Grab the IDs that this specific role has chosen to hide
     hidden_records = await hidden_sessions_collection.find({"role": role}, {"_id": 0}).to_list(length=1000)
     hidden_ids = {record["interview_id"] for record in hidden_records}
     
     result = []
     for i in interviews:
-        # If this role hid this session, skip it
         if i["id"] in hidden_ids:
             continue
-            
         report_exists = await reports_collection.find_one({"interview_id": i["id"]}) is not None
-        
         result.append({
             "id": i["id"], 
             "target_role": i["target_role"],
@@ -276,17 +278,36 @@ async def get_candidate_interviews(username: str, role: str = "candidate"):
         })
     return result
 
+# 2. NEW: Fetches ALL interviews generated by a specific recruiter, even if candidate disconnects
+@app.get("/api/recruiters/{recruiter_key}/all-interviews")
+async def get_all_recruiter_interviews(recruiter_key: str):
+    interviews = await interviews_collection.find({"recruiter_key": recruiter_key}, {"_id": 0}).to_list(length=1000)
+    
+    hidden_records = await hidden_sessions_collection.find({"role": "recruiter"}, {"_id": 0}).to_list(length=1000)
+    hidden_ids = {record["interview_id"] for record in hidden_records}
+    
+    result = []
+    for i in interviews:
+        if i["id"] in hidden_ids:
+            continue
+        report_exists = await reports_collection.find_one({"interview_id": i["id"]}) is not None
+        result.append({
+            "id": i["id"], 
+            "candidate_name": i.get("candidate_name", "Unknown"), # Needed for the new global list
+            "target_role": i["target_role"],
+            "created_at": i.get("created_at", datetime.now(timezone.utc).isoformat()),
+            "is_completed": report_exists
+        })
+    return result
+
 @app.delete("/api/interviews/{interview_id}")
 async def delete_interview(interview_id: str, role: str = "candidate"):
-    # Simply log that this role wants this interview ID hidden from them
     existing_hidden = await hidden_sessions_collection.find_one({
         "interview_id": interview_id,
         "role": role
     })
-    
     if not existing_hidden:
         await hidden_sessions_collection.insert_one({"interview_id": interview_id, "role": role})
-        
     return {"message": f"Interview session hidden for {role} successfully"}
 
 @app.delete("/api/candidates/{username}")
@@ -295,11 +316,9 @@ async def delete_candidate(username: str):
     if not db_candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
     
-    # Hard Delete everything for the candidate if requested by Recruiter
     await reports_collection.delete_many({"candidate_name": username})
     await interviews_collection.delete_many({"candidate_name": username})
     await candidates_collection.delete_one({"username": username})
-    
     return {"message": "Candidate and all associated data deleted successfully"}
 
 # ==========================================
@@ -308,7 +327,7 @@ async def delete_candidate(username: str):
 
 @app.get("/api/generate-questions")
 async def generate_questions(role: str):
-    prompt = f'You are an expert interviewer. Generate exactly 10 common behavioral and technical interview questions for a candidate applying for a "{role}" role. Return ONLY the questions, one per line. Do NOT include numbers, bullet points, markdown, or introductory text.'
+    prompt = f'You are an expert interviewer. Generate exactly 5 common behavioral and technical interview questions for a candidate applying for a "{role}" role. Return ONLY the questions, one per line. Do NOT include numbers, bullet points, markdown, or introductory text.'
     try:
         response = model.generate_content(prompt)
         questions = [q.strip() for q in response.text.strip().split('\n') if q.strip()]
@@ -328,9 +347,7 @@ async def polish_questions(payload: PolishRequest):
     3. Improve the wording to sound professional and clear. 
     4. Do not show the number, instead start the new question in new line.
     don't generate the heading
-    
     CRITICAL: Do NOT answer the questions, just format and improve the questions themselves.
-    
     Raw questions:
     {payload.raw_text}
     """
@@ -357,7 +374,7 @@ async def evaluate_candidate_answer(payload: AnswerPayload):
     Evaluate the candidate's spoken answer out of 100 based on its relevance, clarity, completeness, and professionalism. 
     Do NOT strictly compare it to a single "ideal" answer. Instead, assess the merit, logical flow, and quality of the candidate's own unique response.
     
-    You MUST return your response as a valid JSON object with exact keys "score" (a number), "feedback" (a very very short string), and "idealAnswer" (a string).
+    You MUST return your response as a valid JSON object with exact keys "score" (a number), "feedback" (a short string), and "idealAnswer" (a string).
     
     CRITICAL INSTRUCTION: You MUST ALWAYS provide the "idealAnswer" field. It should contain a highly effective, alternative way to answer the question to serve as a helpful example for the candidate. Do not include markdown code blocks.
     """
@@ -376,7 +393,6 @@ async def evaluate_candidate_answer(payload: AnswerPayload):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 # ==========================================
 # INTERVIEW & REPORT CREATION
 # ==========================================
@@ -384,24 +400,21 @@ async def evaluate_candidate_answer(payload: AnswerPayload):
 @app.post("/api/interviews")
 async def create_interview(setup: InterviewSetup):
     interview_id = str(uuid.uuid4())[:8]  
-    
     await interviews_collection.insert_one({
         "id": interview_id,
         "candidate_name": setup.candidate_name,
+        "recruiter_key": setup.recruiter_key, # Crucial mapping
         "target_role": setup.target_role,
         "questions": setup.questions,
         "created_at": datetime.now(timezone.utc).isoformat()
     })
-    
     return {"interview_id": interview_id}
 
 @app.get("/api/interviews/{interview_id}")
 async def get_interview(interview_id: str):
     db_session = await interviews_collection.find_one({"id": interview_id}, {"_id": 0})
-    
     if not db_session:
         raise HTTPException(status_code=404, detail="Interview session not found.")
-    
     return {
         "candidate_name": db_session["candidate_name"],
         "target_role": db_session["target_role"],
@@ -413,20 +426,14 @@ async def save_interview_report(payload: ReportPayload):
     existing_report = await reports_collection.find_one({"interview_id": payload.interview_id})
     if existing_report:
         raise HTTPException(status_code=400, detail="Report already exists for this interview.")
-    
-    # Store directly as a dictionary! No JSON stringification needed in MongoDB.
     await reports_collection.insert_one(payload.dict())
-    
     return {"message": "Report saved successfully"}
 
 @app.get("/api/reports/{interview_id}")
 async def get_interview_report(interview_id: str):
-    # Retrieve the report, specifically ignoring the MongoDB unique `_id` field
     db_report = await reports_collection.find_one({"interview_id": interview_id}, {"_id": 0})
-    
     if not db_report:
         raise HTTPException(status_code=404, detail="Report not found or interview incomplete.")
-        
     return db_report
 
 if __name__ == "__main__":
