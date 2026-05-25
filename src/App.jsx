@@ -10,10 +10,13 @@ import InterviewerDashboard from './pages/InterviewerDashboard';
 import RecruiterOptionsPage from './pages/RecruiterOptionsPage';
 
 export default function App() {
-  // Global App State (Updated to check localStorage first)
+  // Global App State
   const [currentPage, setCurrentPage] = useState("landing");
   const [authRole, setAuthRole] = useState(() => localStorage.getItem("authRole") || null);
-  const [username, setUsername] = useState(() => localStorage.getItem("username") || "");
+  
+  // Separate Usernames
+  const [recruiterUsername, setRecruiterUsername] = useState(() => localStorage.getItem("recruiterUsername") || "");
+  const [candidateUsername, setCandidateUsername] = useState(() => localStorage.getItem("candidateUsername") || "");
   
   // Interview Data State
   const [interviewData, setInterviewData] = useState(null);
@@ -23,7 +26,7 @@ export default function App() {
   const [interviewFormat, setInterviewFormat] = useState(null); 
 
   // ==========================================
-  // BULLETPROOF BROWSER HISTORY FIX (Hash Routing)
+  // ROUTING & BROWSER HISTORY FIX
   // ==========================================
   useEffect(() => {
     const handleHashChange = () => {
@@ -37,42 +40,67 @@ export default function App() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  const navigate = (page) => {
-    window.location.hash = page; 
+  // Using `replaceHistory` parameter prevents the back button from returning to the previous state
+  const navigate = (page, replaceHistory = false) => {
+    if (replaceHistory) {
+      window.location.replace(`#${page}`);
+    } else {
+      window.location.hash = page; 
+    }
   };
+
   // ==========================================
+  // ROUTE GUARDS: Prevent "Back Button" exploits
+  // ==========================================
+  useEffect(() => {
+    const isRecruiterRoute = ["recruiter-options", "interviewer-dashboard"].includes(currentPage);
+    const isCandidateRoute = ["setup", "interview"].includes(currentPage);
+    const isSharedRoute = ["dashboard"].includes(currentPage);
+
+    // If unauthenticated or accessing the wrong role's page, forcefully replace history and boot to landing
+    if ((isRecruiterRoute && authRole !== "recruiter") || 
+        (isCandidateRoute && authRole !== "candidate") ||
+        (isSharedRoute && !authRole)) {
+        navigate("landing", true); 
+    }
+  }, [currentPage, authRole]);
 
   // --- ROUTING LOGIC ---
   const handleLogin = (loggedInUsername) => {
-    setUsername(loggedInUsername);
-    
-    // SAVE TO LOCAL STORAGE
-    localStorage.setItem("username", loggedInUsername);
     localStorage.setItem("authRole", authRole); 
 
     if (authRole === "recruiter") {
+      setRecruiterUsername(loggedInUsername);
+      localStorage.setItem("recruiterUsername", loggedInUsername);
       navigate("recruiter-options"); 
     } else {
+      setCandidateUsername(loggedInUsername);
+      localStorage.setItem("candidateUsername", loggedInUsername);
       navigate("setup");
     }
   };
 
   const handleLogout = () => {
-    setUsername("");
+    // 1. Clear States
+    setRecruiterUsername("");
+    setCandidateUsername("");
     setAuthRole(null);
     setInterviewFormat(null);
     
-    // CLEAR LOCAL STORAGE
-    localStorage.removeItem("username");
+    // 2. Clear Local Storage
+    localStorage.removeItem("recruiterUsername");
+    localStorage.removeItem("candidateUsername");
     localStorage.removeItem("authRole");
+    localStorage.removeItem("username"); 
     
-    navigate("landing");
+    // 3. FORCE REPLACE ROUTE: They are logged out completely and cannot go backward
+    navigate("landing", true);
   };
 
   return (
     <div className="app" style={{ display: 'block', minHeight: '100vh', padding: 0 }}>
       
-      {/* 1. LANDING PAGE */}
+      {/* 1. PUBLIC ROUTES */}
       {currentPage === "landing" && (
         <LandingPage 
           onStartCandidate={() => { setAuthRole("candidate"); navigate("auth"); }}
@@ -80,7 +108,6 @@ export default function App() {
         />
       )}
 
-      {/* 2. AUTHENTICATION */}
       {currentPage === "auth" && (
         <AuthPage 
           type={authRole} 
@@ -89,8 +116,8 @@ export default function App() {
         />
       )}
 
-      {/* 3. RECRUITER FLOW */}
-      {currentPage === "recruiter-options" && (
+      {/* 2. SECURE RECRUITER FLOW */}
+      {authRole === "recruiter" && currentPage === "recruiter-options" && (
         <RecruiterOptionsPage 
           onSelectOption={(format) => {
             setInterviewFormat(format); 
@@ -100,12 +127,11 @@ export default function App() {
         />
       )}
 
-      {currentPage === "interviewer-dashboard" && (
+      {authRole === "recruiter" && currentPage === "interviewer-dashboard" && (
         <InterviewerDashboard 
-          username={username}
+          username={recruiterUsername}
           format={interviewFormat} 
-          onBack={() => navigate("recruiter-options")} 
-          // --- NEW: Handle Recruiter Viewing Report ---
+          onBack={handleLogout} // Hooked directly to the complete logout
           onViewReport={(fetchedReport) => {
             setReportData(fetchedReport);
             navigate("dashboard");
@@ -113,10 +139,10 @@ export default function App() {
         />
       )}
 
-      {/* 4. CANDIDATE FLOW */}
-      {currentPage === "setup" && (
+      {/* 3. SECURE CANDIDATE FLOW */}
+      {authRole === "candidate" && currentPage === "setup" && (
         <SetupPage 
-          username={username}
+          username={candidateUsername}
           onViewReport={(fetchedReport) => {
             setReportData(fetchedReport);
             navigate("dashboard");
@@ -129,7 +155,7 @@ export default function App() {
         />
       )}
 
-      {currentPage === "interview" && (
+      {authRole === "candidate" && currentPage === "interview" && (
         <div style={{ padding: '16px' }}>
             <InterviewMonitor 
               studentName={interviewData?.studentName}
@@ -167,12 +193,13 @@ export default function App() {
         </div>
       )}
 
-      {currentPage === "dashboard" && (
+      {/* 4. SECURE SHARED DASHBOARD */}
+      {authRole && currentPage === "dashboard" && (
         <DashboardPage 
           studentName={interviewData?.studentName || reportData?.candidate_name}
+          loggedInUser={authRole === "recruiter" ? recruiterUsername : candidateUsername}
           report={reportData}
           onExit={() => {
-            // --- NEW: Smart Exit Routing Based on Role ---
             if (authRole === "recruiter") {
               navigate("interviewer-dashboard");
             } else {

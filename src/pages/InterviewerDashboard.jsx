@@ -16,7 +16,7 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
   const [candidateInterviews, setCandidateInterviews] = useState([]);
   const [reportCandidate, setReportCandidate] = useState(null);
 
-  // NEW: State for global all-reports view
+  // State for global all-reports view
   const [showAllReports, setShowAllReports] = useState(false);
   const [allInterviews, setAllInterviews] = useState([]);
 
@@ -29,6 +29,7 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
 
   const API_BASE = "http://localhost:8000";
 
+  // INITIALIZATION
   useEffect(() => {
     const initData = async () => {
         try {
@@ -57,6 +58,51 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
         if (speechTrackerRef.current) speechTrackerRef.current.turnOff();
     };
   }, [username]);
+
+  // ==========================================
+  // NEW: REAL-TIME POLLING FOR DASHBOARD
+  // ==========================================
+  useEffect(() => {
+    if (!recruiterKey || recruiterKey === "LOADING...") return;
+
+    const pollData = async () => {
+        try {
+            // 1. Poll candidate connections in the background
+            const candRes = await fetch(`${API_BASE}/api/candidates?recruiter_key=${recruiterKey}`);
+            if (candRes.ok) {
+                const candData = await candRes.json();
+                setCandidatesList(candData);
+                localStorage.setItem(`cands_${username}`, JSON.stringify(candData));
+            }
+
+            // 2. Poll global reports if the recruiter is viewing them
+            if (showAllReports) {
+                const allRes = await fetch(`${API_BASE}/api/recruiters/${recruiterKey}/all-interviews`);
+                if (allRes.ok) {
+                    const allData = await allRes.json();
+                    setAllInterviews(allData);
+                }
+            }
+
+            // 3. Poll specific candidate history if the recruiter is viewing it
+            if (reportCandidate) {
+                const histRes = await fetch(`${API_BASE}/api/candidates/${reportCandidate}/interviews?role=recruiter`);
+                if (histRes.ok) {
+                    const histData = await histRes.json();
+                    setCandidateInterviews(histData);
+                }
+            }
+        } catch (err) {
+            // Silently fail polling to not disrupt the UI
+            console.error("Polling error:", err);
+        }
+    };
+
+    // Poll every 5 seconds
+    const intervalId = setInterval(pollData, 5000);
+    return () => clearInterval(intervalId);
+  }, [recruiterKey, showAllReports, reportCandidate, username]);
+  // ==========================================
 
   const refreshCandidates = async () => {
       if (recruiterKey === "LOADING...") return;
@@ -168,7 +214,6 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
       } catch (err) { console.error("Failed to load interviews", err); }
   };
 
-  // NEW: Fetch all reports for this recruiter globally
   const handleFetchAllReports = async () => {
       setReportCandidate(null);
       setShowAllReports(true);
@@ -307,7 +352,6 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
                                     <div style={{ marginTop: '10px', display: 'flex', gap: '5px' }}>
                                         <button className="btn primary" onClick={() => { setCandidateName(cand.username); setTargetRole(cand.role || ""); setShowCandidatesDropdown(false); }}>New Interview</button>
                                         <button className="btn" onClick={() => { handleViewReportsList(cand.username); setShowCandidatesDropdown(false); }}>View History</button>
-                                        {/* Removed the Delete Account Button here as requested */}
                                     </div>
                                 </div>
                             ))}

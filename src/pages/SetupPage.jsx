@@ -33,16 +33,22 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
     }
   }, [username]);
 
-  // Fetch interviews ONLY IF linked, and strictly filter by the linkedRecruiterKey
+  // REAL-TIME POLLING FOR CANDIDATE (Assigned Links)
   useEffect(() => {
-    if (username && isLinked && linkedRecruiterKey) {
+    if (!username || !isLinked || !linkedRecruiterKey) return;
+
+    const fetchInterviews = () => {
       fetch(`${API_BASE}/api/candidates/${username}/interviews?role=candidate&recruiter_key=${linkedRecruiterKey}`)
         .then(res => res.json())
         .then(data => {
           if (Array.isArray(data)) setAssignedInterviews(data);
         })
         .catch(err => console.error("Failed to fetch interviews", err));
-    }
+    };
+
+    fetchInterviews();
+    const intervalId = setInterval(fetchInterviews, 5000);
+    return () => clearInterval(intervalId);
   }, [username, isLinked, linkedRecruiterKey]);
 
   const handleLinkKey = async (e) => {
@@ -61,9 +67,7 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
 
           if (!res.ok) throw new Error(data.detail);
 
-          // Clear old data instantly to prevent ghosting
           setAssignedInterviews([]);
-          
           setRecruiterName(data.recruiter_name);
           setLinkedRecruiterKey(keyInput);
           setIsLinked(true);
@@ -102,7 +106,7 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
   };
 
   const handleDelete = async (idToDelete) => {
-    const confirmDelete = window.confirm("Are you sure you want to remove this assessment? It will no longer appear on your dashboard.");
+    const confirmDelete = window.confirm("Are you sure you want to remove this assessment?");
     if (!confirmDelete) return;
     
     try {
@@ -114,17 +118,12 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
   };
 
   const handleDeleteAccount = async () => {
-      if (!window.confirm("Are you sure you want to permanently delete your account and all interview records? This action cannot be undone.")) return;
+      if (!window.confirm("Are you sure you want to permanently delete your account?")) return;
       try {
           const res = await fetch(`${API_BASE}/api/candidates/${username}`, { method: 'DELETE' });
-          if (res.ok) {
-              onBack(); // Triggers logout
-          } else {
-              alert("Failed to delete account.");
-          }
-      } catch (err) {
-          alert("Error deleting account.");
-      }
+          if (res.ok) onBack(); 
+          else alert("Failed to delete account.");
+      } catch (err) { alert("Error deleting account."); }
   };
 
   const handleManualSubmit = (e) => {
@@ -137,7 +136,7 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
       return <div className="shell flex-center"><h2>Loading portal...</h2></div>;
   }
 
-  // --- GATEKEEPER VIEW: IF NOT LINKED YET ---
+  // --- GATEKEEPER VIEW ---
   if (isLinked === false) {
       return (
         <div className="shell" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', padding: '20px' }}>
@@ -145,7 +144,6 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                     <h1 style={{ margin: 0 }}>Connect Account</h1>
                     
-                    {/* THREE DOTS MENU */}
                     <div style={{ position: 'relative' }}>
                         <button className="btn" onClick={() => setShowMenu(!showMenu)} style={{ padding: '10px 15px', fontSize: '1.2rem' }}>⋮</button>
                         {showMenu && (
@@ -155,7 +153,6 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
                             </div>
                         )}
                     </div>
-
                 </div>
                 
                 <p style={{ color: '#94a3b8', marginBottom: '30px' }}>
@@ -165,25 +162,15 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
                 {error && <div style={{ color: '#ef4444', marginBottom: '15px', padding: '10px', background: '#451a1e', borderRadius: '6px' }}>{error}</div>}
 
                 <form onSubmit={handleLinkKey} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                    <input 
-                        type="text" 
-                        className="input" 
-                        placeholder="e.g. A7B29F"
-                        value={keyInput} 
-                        onChange={e => setKeyInput(e.target.value.toUpperCase())} 
-                        style={{ fontSize: '1.2rem', textAlign: 'center', letterSpacing: '3px' }}
-                        maxLength={6}
-                    />
-                    <button type="submit" className="btn primary" disabled={loading} style={{ padding: '15px' }}>
-                        {loading ? "Verifying..." : "Connect to Recruiter"}
-                    </button>
+                    <input type="text" className="input" placeholder="e.g. A7B29F" value={keyInput} onChange={e => setKeyInput(e.target.value.toUpperCase())} style={{ fontSize: '1.2rem', textAlign: 'center', letterSpacing: '3px' }} maxLength={6} />
+                    <button type="submit" className="btn primary" disabled={loading} style={{ padding: '15px' }}>{loading ? "Verifying..." : "Connect to Recruiter"}</button>
                 </form>
             </div>
         </div>
       );
   }
 
-  // --- MAIN PORTAL: IF LINKED SUCCESSFULLY ---
+  // --- MAIN PORTAL ---
   return (
     <div className="shell" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', padding: '20px' }}>
       <div className="card" style={{ padding: '40px', maxWidth: '600px', width: '100%' }}>
@@ -191,7 +178,6 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
           <h1 style={{ margin: 0 }}>Candidate Portal</h1>
           
-          {/* THREE DOTS MENU */}
           <div style={{ position: 'relative' }}>
               <button className="btn" onClick={() => setShowMenu(!showMenu)} style={{ padding: '10px 15px', fontSize: '1.2rem' }}>⋮</button>
               {showMenu && (
@@ -203,13 +189,21 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
           </div>
         </div>
 
-        {/* Change Recruiter UI Segment */}
         {!isChangingKey ? (
-            <div style={{ marginBottom: '20px', background: 'rgba(56, 189, 248, 0.1)', padding: '15px', borderRadius: '8px', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
-                <p style={{ color: '#f8fafc', margin: '0 0 5px 0' }}>Welcome, <strong>{username}</strong>.</p>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <p style={{ color: '#38bdf8', margin: 0, fontSize: '14px' }}>✅ Connected to Recruiter: <strong>{recruiterName}</strong></p>
-                    <button className="btn" onClick={() => setIsChangingKey(true)} style={{ padding: '6px 12px', fontSize: '12px', background: '#1e293b', color: '#f8fafc' }}>Change Recruiter</button>
+            <div style={{ marginBottom: '20px', background: 'linear-gradient(145deg, #0f172a, #1e293b)', padding: '20px', borderRadius: '12px', border: '1px solid #38bdf8', boxShadow: '0 4px 15px rgba(56, 189, 248, 0.1)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
+                        <p style={{ color: '#94a3b8', margin: '0 0 5px 0', fontSize: '13px' }}>CANDIDATE</p>
+                        <p style={{ color: '#f8fafc', margin: '0 0 15px 0', fontSize: '1.1rem' }}><strong>{username}</strong></p>
+                        
+                        <p style={{ color: '#94a3b8', margin: '0 0 5px 0', fontSize: '13px' }}>ASSESSMENT SENT BY</p>
+                        <p style={{ color: '#38bdf8', margin: 0, fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            ✅ <strong>{recruiterName}</strong>
+                        </p>
+                    </div>
+                    <button className="btn" onClick={() => setIsChangingKey(true)} style={{ padding: '8px 12px', fontSize: '12px', background: 'rgba(255,255,255,0.05)', color: '#94a3b8', border: '1px solid #334155' }}>
+                        Change Link
+                    </button>
                 </div>
             </div>
         ) : (
@@ -231,6 +225,7 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
             <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {assignedInterviews.map((inv, index) => (
                 <li key={inv.id} style={{ background: '#0f172a', padding: '20px', borderRadius: '8px', border: '1px solid #1e293b', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '15px' }}>
+                  
                   <div>
                     <div style={{ fontWeight: 'bold', color: '#38bdf8', fontSize: '1.2rem' }}>
                       Assessment {index + 1}: {inv.target_role}
@@ -240,6 +235,10 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
                     </div>
                     <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '2px' }}>
                       <strong>Session ID:</strong> {inv.id}
+                    </div>
+                    {/* NEW: DISPLAY THE RECRUITER NAME ON EVERY LIST ITEM/ASSESSMENT */}
+                    <div style={{ fontSize: '0.9rem', color: '#38bdf8', marginTop: '8px', padding: '4px 8px', background: 'rgba(56, 189, 248, 0.1)', borderRadius: '4px', display: 'inline-block' }}>
+                      ✅ <strong>Sent by:</strong> {recruiterName}
                     </div>
                   </div>
                   
@@ -252,9 +251,7 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
                              const res = await fetch(`${API_BASE}/api/reports/${inv.id}`);
                              const data = await res.json();
                              if(res.ok) onViewReport(data);
-                          } catch (e) {
-                             setError("Failed to load report from server.");
-                          }
+                          } catch (e) { setError("Failed to load report from server."); }
                         }}
                         style={{ padding: '12px 20px', background: '#38bdf8', color: '#0f172a', fontWeight: 'bold' }}
                       >
