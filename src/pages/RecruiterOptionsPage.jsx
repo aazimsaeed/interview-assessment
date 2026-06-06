@@ -14,7 +14,7 @@ export default function RecruiterOptionsPage({ onSelectOption, onBack }) {
                     ← Logout
                 </button>
                 
-                <h2 style={{ marginBottom: '10px', color: '#e6edf3' }}>Select Interview Format</h2>
+                <h2 style={{ marginBottom: '10px', color: '#e6edf3' }}>INTERVIEW ASSESSMENT TYPE</h2>
                 <p style={{ color: '#9fb0c3', marginBottom: '30px' }}>Choose the type of assessment you want to create.</p>
                 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>

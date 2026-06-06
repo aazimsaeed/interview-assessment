@@ -60,7 +60,7 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
   }, [username]);
 
   // ==========================================
-  // NEW: REAL-TIME POLLING FOR DASHBOARD
+  // REAL-TIME POLLING FOR DASHBOARD
   // ==========================================
   useEffect(() => {
     if (!recruiterKey || recruiterKey === "LOADING...") return;
@@ -247,13 +247,36 @@ export default function InterviewerDashboard({ onBack, username, onViewReport })
       } catch (err) { console.error("Failed to delete report", err); }
   };
 
+  // ==========================================
+  // SUCCESS SCREEN (WITH SHARING OPTIONS)
+  // ==========================================
   if (generatedId) {
+      const shareText = `Hello! Your AI Interview session has been created.\n\nYour Session ID is: ${generatedId}\nRecruiter Key: ${recruiterKey}\n\nPlease log in to the Candidate Portal and use this ID to start your assessment.`;
+      const mailtoLink = `mailto:?subject=${encodeURIComponent("Your AI Interview Session")}&body=${encodeURIComponent(shareText)}`;
+      const whatsappLink = `https://wa.me/?text=${encodeURIComponent(shareText)}`;
+      const smsLink = `sms:?body=${encodeURIComponent(shareText)}`;
+
       return (
-          <div className="shell flex-center" style={{ height: '100vh' }}>
+          <div className="shell flex-center" style={{ height: '100vh', padding: '20px' }}>
               <div className="card" style={{ padding: '40px', maxWidth: '500px', width: '100%', textAlign: 'center' }}>
                   <h2 style={{ color: '#22c55e', marginBottom: '20px' }}>✅ Session Created!</h2>
-                  <div style={{ background: '#0f172a', padding: '20px', borderRadius: '8px', fontSize: '2rem', fontWeight: 'bold', margin: '20px 0', color: '#38bdf8' }}>{generatedId}</div>
-                  <button type="button" className="btn primary" onClick={() => { setGeneratedId(null); setCandidateName(""); }} style={{ width: '100%' }}>Create Another</button>
+                  
+                  <div style={{ background: '#0f172a', padding: '20px', borderRadius: '8px', fontSize: '2.5rem', fontWeight: 'bold', margin: '20px 0', color: '#38bdf8', letterSpacing: '2px' }}>
+                      {generatedId}
+                  </div>
+
+                  <p style={{ color: '#94a3b8', marginBottom: '15px' }}>Share this Session ID with your candidate:</p>
+                  
+                  <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', marginBottom: '30px' }}>
+                      <a href={mailtoLink} className="btn" style={{flex: 1, textDecoration: 'none', background: '#ea4335', color: '#fff', border: 'none', padding: '10px'}}>📧 Email</a>
+                      <a href={smsLink} className="btn" style={{flex: 1, textDecoration: 'none', background: '#3b82f6', color: '#fff', border: 'none', padding: '10px'}}>📱 SMS</a>
+                      <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="btn" style={{flex: 1, textDecoration: 'none', background: '#25D366', color: '#fff', border: 'none', padding: '10px'}}>💬 WhatsApp</a>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '10px', flexDirection: 'column' }}>
+                      <button type="button" className="btn primary" onClick={() => { setGeneratedId(null); setCandidateName(""); setCustomQuestions(""); }} style={{ width: '100%' }}>Create Another Session</button>
+                      <button type="button" className="btn" onClick={() => { setGeneratedId(null); setCandidateName(""); setCustomQuestions(""); }} style={{ width: '100%', background: 'transparent', borderColor: '#334155', color: '#94a3b8' }}>← Back to Dashboard</button>
+                  </div>
               </div>
           </div>
       );
