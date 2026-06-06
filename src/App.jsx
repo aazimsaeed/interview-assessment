@@ -121,8 +121,7 @@ export default function App() {
         <RecruiterOptionsPage 
           onSelectOption={(format) => {
             setInterviewFormat(format); 
-            // FIXED: Using "true" here replaces history so the browser back button doesn't take them back to options
-            navigate("interviewer-dashboard", true); 
+            navigate("interviewer-dashboard"); 
           }}
           onBack={handleLogout}
         />
