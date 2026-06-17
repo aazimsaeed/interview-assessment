@@ -389,7 +389,7 @@ export default function InterviewMonitor({ studentName, customQuestions, onExit,
         
         lastSnapshotTimeRef.current = performance.now();
     }
-
+    // fetching the endpoint for api/evaluate
     const evaluation = await evaluateAnswer(answeredQuestion, answerText);
     
     setAnswerResult(evaluation);

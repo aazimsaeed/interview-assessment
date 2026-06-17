@@ -8,6 +8,7 @@ import InterviewMonitor from './pages/InterviewMonitor';
 import DashboardPage from './pages/DashboardPage';
 import InterviewerDashboard from './pages/InterviewerDashboard';
 import RecruiterOptionsPage from './pages/RecruiterOptionsPage';
+import AdminDashboard from './pages/AdminDashboard';
 
 export default function App() {
   // Global App State
@@ -17,7 +18,8 @@ export default function App() {
   // Separate Usernames
   const [recruiterUsername, setRecruiterUsername] = useState(() => localStorage.getItem("recruiterUsername") || "");
   const [candidateUsername, setCandidateUsername] = useState(() => localStorage.getItem("candidateUsername") || "");
-  
+  const [adminUsername, setAdminUsername] = useState(() => localStorage.getItem("adminUsername") || "");
+
   // Interview Data State
   const [interviewData, setInterviewData] = useState(null);
   const [reportData, setReportData] = useState(null);
@@ -55,6 +57,7 @@ export default function App() {
   useEffect(() => {
     const isRecruiterRoute = ["recruiter-options", "interviewer-dashboard"].includes(currentPage);
     const isCandidateRoute = ["setup", "interview"].includes(currentPage);
+    const isAdminRoute = ["admin-dashboard"].includes(currentPage);
     const isSharedRoute = ["dashboard"].includes(currentPage);
 
     // If unauthenticated or accessing the wrong role's page, forcefully replace history and boot to landing
@@ -73,7 +76,11 @@ export default function App() {
       setRecruiterUsername(loggedInUsername);
       localStorage.setItem("recruiterUsername", loggedInUsername);
       navigate("recruiter-options"); 
-    } else {
+    }else if (authRole === "admin") { // <-- ADDED ADMIN LOGIC
+      setAdminUsername(loggedInUsername);
+      localStorage.setItem("adminUsername", loggedInUsername);
+      navigate("admin-dashboard");
+    }else {
       setCandidateUsername(loggedInUsername);
       localStorage.setItem("candidateUsername", loggedInUsername);
       navigate("setup");
@@ -84,12 +91,14 @@ export default function App() {
     // 1. Clear States
     setRecruiterUsername("");
     setCandidateUsername("");
+    setAdminUsername("");
     setAuthRole(null);
     setInterviewFormat(null);
     
     // 2. Clear Local Storage
     localStorage.removeItem("recruiterUsername");
     localStorage.removeItem("candidateUsername");
+    localStorage.removeItem("adminUsername");
     localStorage.removeItem("authRole");
     localStorage.removeItem("username"); 
     
@@ -103,8 +112,21 @@ export default function App() {
       {/* 1. PUBLIC ROUTES */}
       {currentPage === "landing" && (
         <LandingPage 
-          onStartCandidate={() => { setAuthRole("candidate"); navigate("auth"); }}
-          onStartRecruiter={() => { setAuthRole("recruiter"); navigate("auth"); }}
+          onStartCandidate={() => { 
+            setAuthRole("candidate"); 
+            localStorage.setItem("authRole", "candidate"); // <-- ADD THIS
+            navigate("auth"); 
+          }}
+          onStartRecruiter={() => { 
+            setAuthRole("recruiter"); 
+            localStorage.setItem("authRole", "recruiter"); // <-- ADD THIS
+            navigate("auth"); 
+          }}
+          onStartAdmin={() => { 
+            setAuthRole("admin"); 
+            localStorage.setItem("authRole", "admin"); // <-- ADD THIS
+            navigate("auth"); 
+          }} 
         />
       )}
 
@@ -113,6 +135,18 @@ export default function App() {
           type={authRole} 
           onLogin={handleLogin} 
           onBack={handleLogout} 
+        />
+      )}
+
+      {/* 2. SECURE ADMIN FLOW */}
+      {authRole === "admin" && currentPage === "admin-dashboard" && (
+        <AdminDashboard 
+          username={adminUsername} 
+          onBack={handleLogout}
+          onViewReport={(fetchedReport) => {
+            setReportData(fetchedReport);
+            navigate("dashboard");
+          }} 
         />
       )}
 
@@ -197,11 +231,13 @@ export default function App() {
       {authRole && currentPage === "dashboard" && (
         <DashboardPage 
           studentName={interviewData?.studentName || reportData?.candidate_name}
-          loggedInUser={authRole === "recruiter" ? recruiterUsername : candidateUsername}
+          loggedInUser={authRole === "recruiter" ? recruiterUsername : (authRole === "admin" ? adminUsername : candidateUsername)}
           report={reportData}
           onExit={() => {
             if (authRole === "recruiter") {
               navigate("interviewer-dashboard");
+            } else if (authRole === "admin") {
+              navigate("admin-dashboard"); // Return admin to admin dashboard
             } else {
               navigate("setup");
             }

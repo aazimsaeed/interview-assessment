@@ -7,6 +7,7 @@ import google.generativeai as genai
 import os
 import uuid
 import hashlib
+import random  # <-- Added for secure random OTP generation
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
@@ -43,7 +44,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# --- CORS Configuration for Deployment ---
+# --- CORS Configuration ---
 FRONTEND_URL = os.getenv("FRONTEND_URL", "*") 
 
 app.add_middleware(
@@ -64,7 +65,7 @@ class InterviewSetup(BaseModel):
     candidate_name: str
     target_role: str
     questions: List[str]
-    recruiter_key: str # Associates interview strictly with creator
+    recruiter_key: str 
 
 class AnswerPayload(BaseModel):
     interview_id: str
@@ -74,6 +75,11 @@ class AnswerPayload(BaseModel):
 class UserAuth(BaseModel):
     username: str
     password: str
+
+# New schema for tracking Admin Email and verification states
+class AdminAuth(BaseModel):
+    email: str
+    otp: Optional[str] = None
 
 class CandidateRegister(BaseModel):
     username: str
@@ -121,6 +127,100 @@ def hash_password(password: str):
 # AUTHENTICATION & KEY ENDPOINTS
 # ==========================================
 
+# --- NEW: AUTHORIZED ADMIN SYSTEM CONFIG ---
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
+admin_otp_store = {}
+
+@app.post("/api/admins/verify-email")
+async def verify_admin_email(payload: AdminAuth):
+    if payload.email.lower() != ADMIN_EMAIL.lower():
+        raise HTTPException(
+            status_code=400, 
+            detail="Email address not authorized, please enter the valid email"
+        )
+    return {"message": "Authorization done successfully"}
+
+@app.post("/api/admins/request-otp")
+async def request_admin_otp(payload: AdminAuth):
+    if payload.email.lower() != ADMIN_EMAIL.lower():
+        raise HTTPException(
+            status_code=400, 
+            detail="Email address not authorized, please enter the valid email"
+        )
+    
+    otp = str(random.randint(100000, 999999))
+    admin_otp_store[payload.email.lower()] = otp
+    return {"generated_otp": otp}
+
+@app.post("/api/admins/login")
+async def login_admin(payload: AdminAuth):
+    email_key = payload.email.lower()
+    if email_key != ADMIN_EMAIL.lower():
+        raise HTTPException(status_code=403, detail="Unauthorized")
+        
+    if email_key not in admin_otp_store or admin_otp_store[email_key] != payload.otp:
+        raise HTTPException(status_code=401, detail="Invalid or expired OTP")
+    
+    del admin_otp_store[email_key]
+    return {"username": "SuperAdmin", "role": "admin"}
+
+@app.get("/api/admins/system-stats")
+async def get_system_stats():
+    r_count = await recruiters_collection.count_documents({})
+    c_count = await candidates_collection.count_documents({})
+    i_count = await interviews_collection.count_documents({})
+    rep_count = await reports_collection.count_documents({})
+    return {
+        "recruiters": r_count,
+        "candidates": c_count,
+        "interviews": i_count,
+        "reports": rep_count
+    }
+
+@app.get("/api/admins/users")
+async def get_all_users_for_admin():
+    recruiters = await recruiters_collection.find({}, {"_id": 0, "password_hash": 0}).to_list(length=1000)
+    candidates = await candidates_collection.find({}, {"_id": 0, "password_hash": 0}).to_list(length=1000)
+    return {"recruiters": recruiters, "candidates": candidates}
+
+@app.delete("/api/admins/users/{role}/{username}")
+async def admin_delete_user(role: str, username: str):
+    if role == "recruiter":
+        db_recruiter = await recruiters_collection.find_one({"username": username})
+        if not db_recruiter:
+            raise HTTPException(status_code=404, detail="Recruiter not found")
+        recruiter_key = db_recruiter.get("recruiter_key")
+        if recruiter_key:
+            await candidates_collection.update_many(
+                {"linked_recruiter": recruiter_key},
+                {"$set": {"linked_recruiter": None, "recruiter_name": None}}
+            )
+        await recruiters_collection.delete_one({"username": username})
+        return {"message": f"Recruiter {username} deleted."}
+    elif role == "candidate":
+        await reports_collection.delete_many({"candidate_name": username})
+        await interviews_collection.delete_many({"candidate_name": username})
+        await candidates_collection.delete_one({"username": username})
+        return {"message": f"Candidate {username} deleted."}
+    raise HTTPException(status_code=400, detail="Invalid role")
+
+@app.get("/api/admins/all-interviews")
+async def get_all_global_interviews():
+    interviews = await interviews_collection.find({}, {"_id": 0}).to_list(length=1000)
+    result = []
+    for i in interviews:
+        report_exists = await reports_collection.find_one({"interview_id": i["id"]}) is not None
+        result.append({
+            "id": i["id"],
+            "candidate_name": i.get("candidate_name", "Unknown"),
+            "recruiter_key": i.get("recruiter_key", "Unknown"),
+            "target_role": i["target_role"],
+            "created_at": i.get("created_at", datetime.now(timezone.utc).isoformat()),
+            "is_completed": report_exists
+        })
+    return result
+
+# --- RECRUITER & CANDIDATE AUTH ENDPOINTS ---
 @app.post("/api/recruiters/register")
 async def register_recruiter(user: UserAuth):
     existing_user = await recruiters_collection.find_one({"username": user.username})
@@ -251,17 +351,13 @@ async def get_all_candidates(recruiter_key: str = None):
 # ==========================================
 # FETCH & DELETE INTERVIEW ENDPOINTS
 # ==========================================
-
-# 1. Fetches specific candidate interviews (used by SetupPage & old dashboard logic)
 @app.get("/api/candidates/{username}/interviews")
 async def get_candidate_interviews(username: str, role: str = "candidate", recruiter_key: str = None):
     query = {"candidate_name": username}
-    # Only return sessions explicitly tied to the currently linked recruiter
     if recruiter_key:
         query["recruiter_key"] = recruiter_key
 
     interviews = await interviews_collection.find(query, {"_id": 0}).to_list(length=1000)
-    
     hidden_records = await hidden_sessions_collection.find({"role": role}, {"_id": 0}).to_list(length=1000)
     hidden_ids = {record["interview_id"] for record in hidden_records}
     
@@ -278,11 +374,9 @@ async def get_candidate_interviews(username: str, role: str = "candidate", recru
         })
     return result
 
-# 2. NEW: Fetches ALL interviews generated by a specific recruiter, even if candidate disconnects
 @app.get("/api/recruiters/{recruiter_key}/all-interviews")
 async def get_all_recruiter_interviews(recruiter_key: str):
     interviews = await interviews_collection.find({"recruiter_key": recruiter_key}, {"_id": 0}).to_list(length=1000)
-    
     hidden_records = await hidden_sessions_collection.find({"role": "recruiter"}, {"_id": 0}).to_list(length=1000)
     hidden_ids = {record["interview_id"] for record in hidden_records}
     
@@ -293,7 +387,7 @@ async def get_all_recruiter_interviews(recruiter_key: str):
         report_exists = await reports_collection.find_one({"interview_id": i["id"]}) is not None
         result.append({
             "id": i["id"], 
-            "candidate_name": i.get("candidate_name", "Unknown"), # Needed for the new global list
+            "candidate_name": i.get("candidate_name", "Unknown"), 
             "target_role": i["target_role"],
             "created_at": i.get("created_at", datetime.now(timezone.utc).isoformat()),
             "is_completed": report_exists
@@ -302,6 +396,12 @@ async def get_all_recruiter_interviews(recruiter_key: str):
 
 @app.delete("/api/interviews/{interview_id}")
 async def delete_interview(interview_id: str, role: str = "candidate"):
+    if role == "admin":
+        await reports_collection.delete_one({"interview_id": interview_id})
+        await hidden_sessions_collection.delete_many({"interview_id": interview_id})
+        await interviews_collection.delete_one({"id": interview_id})
+        return {"message": "Interview session permanently deleted."}
+    
     existing_hidden = await hidden_sessions_collection.find_one({
         "interview_id": interview_id,
         "role": role
@@ -324,7 +424,6 @@ async def delete_candidate(username: str):
 # ==========================================
 # GEMINI GENERATION & EVALUATION
 # ==========================================
-
 @app.get("/api/generate-questions")
 async def generate_questions(role: str):
     prompt = f'You are an expert interviewer. Generate exactly 5 common behavioral and technical interview questions for a candidate applying for a "{role}" role. Return ONLY the questions, one per line. Do NOT include numbers, bullet points, markdown, or introductory text.'
@@ -378,7 +477,6 @@ async def evaluate_candidate_answer(payload: AnswerPayload):
     
     CRITICAL INSTRUCTION: You MUST ALWAYS provide the "idealAnswer" field. It should contain a highly effective, alternative way to answer the question to serve as a helpful example for the candidate. Do not include markdown code blocks.
     """
-    
     try:
         response = model.generate_content(prompt)
         text_result = response.text.replace('```json', '').replace('```', '').strip()
@@ -396,14 +494,13 @@ async def evaluate_candidate_answer(payload: AnswerPayload):
 # ==========================================
 # INTERVIEW & REPORT CREATION
 # ==========================================
-
 @app.post("/api/interviews")
 async def create_interview(setup: InterviewSetup):
     interview_id = str(uuid.uuid4())[:8]  
     await interviews_collection.insert_one({
         "id": interview_id,
         "candidate_name": setup.candidate_name,
-        "recruiter_key": setup.recruiter_key, # Crucial mapping
+        "recruiter_key": setup.recruiter_key, 
         "target_role": setup.target_role,
         "questions": setup.questions,
         "created_at": datetime.now(timezone.utc).isoformat()

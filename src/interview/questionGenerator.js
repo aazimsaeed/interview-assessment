@@ -1,5 +1,3 @@
-// src/interview/questionGenerator.js
-
 export const speakQuestion = (text, onEndCallback) => {
   if (!('speechSynthesis' in window)) {
     console.warn("Text-to-Speech is not supported in this browser.");

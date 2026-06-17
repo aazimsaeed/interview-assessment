@@ -32,12 +32,14 @@ candidates_collection = db.get_collection("candidates")
 interviews_collection = db.get_collection("interviews")
 reports_collection = db.get_collection("reports")
 hidden_sessions_collection = db.get_collection("hidden_sessions")
+admins_collection = db.get_collection("admins") # <-- ADDED ADMIN COLLECTION
 
 # Create unique indexes for robust data integrity
 async def init_db_indexes():
     try:
         await recruiters_collection.create_index("username", unique=True)
         await candidates_collection.create_index("username", unique=True)
+        await admins_collection.create_index("username", unique=True) # <-- ADDED ADMIN INDEX
         await interviews_collection.create_index("id", unique=True)
         await reports_collection.create_index("interview_id", unique=True)
         print("✅ Database indexes verified successfully.")
