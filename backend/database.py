@@ -33,6 +33,9 @@ interviews_collection = db.get_collection("interviews")
 reports_collection = db.get_collection("reports")
 hidden_sessions_collection = db.get_collection("hidden_sessions")
 admins_collection = db.get_collection("admins") # <-- ADDED ADMIN COLLECTION
+# Add these right under your other collections
+advertisements_collection = db.get_collection("advertisements")
+applications_collection = db.get_collection("applications")
 
 # Create unique indexes for robust data integrity
 async def init_db_indexes():

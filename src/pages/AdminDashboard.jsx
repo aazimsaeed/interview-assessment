@@ -255,7 +255,7 @@ export default function AdminDashboard({ onBack, onViewReport }) {
                             <div key={r.username} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0f172a', padding: '15px', borderRadius: '8px', marginBottom: '10px', border: '1px solid #1e293b' }}>
                                 <div>
                                     <strong style={{ color: '#f8fafc', fontSize: '1.1rem' }}>{r.username}</strong>
-                                    <span style={{ marginLeft: '15px', fontSize: '12px', color: '#94a3b8', background: '#1e293b', padding: '4px 8px', borderRadius: '4px' }}>Key: {r.recruiter_key || 'N/A'}</span>
+                                    <span style={{ marginLeft: '15px', fontSize: '12px', color: '#94a3b8', background: '#1e293b', padding: '4px 8px', borderRadius: '4px' }}>Company: {r.company_name || 'N/A'} | Email: {r.email || 'N/A'}</span>
                                 </div>
                                 <button className="btn" onClick={() => handleDeleteUser('recruiter', r.username)} style={{ background: '#451a1e', color: '#fca5a5', border: '1px solid #7f1d1d' }}>Delete User</button>
                             </div>

@@ -18,7 +18,9 @@ from database import (
     recruiters_collection, 
     candidates_collection, 
     interviews_collection, 
-    reports_collection, 
+    reports_collection,
+    advertisements_collection,
+    applications_collection, 
     hidden_sessions_collection
 )
 
@@ -76,17 +78,39 @@ class UserAuth(BaseModel):
     username: str
     password: str
 
+class RecruiterRegister(BaseModel):
+    username: str
+    password: str
+    email: str
+    company_name: str
+
+class RecruiterProfileUpdate(BaseModel):
+    email: str
+    company_name: str
+
+class ForgotPasswordRequest(BaseModel):
+    role: str
+    email: str
+
+class PasswordReset(BaseModel):
+    role: str
+    email: str
+    otp: str
+    new_password: str
 # New schema for tracking Admin Email and verification states
 class AdminAuth(BaseModel):
     email: str
     otp: Optional[str] = None
 
+class ProfileUpdate(BaseModel):
+    email: str
+    phone: str
+
 class CandidateRegister(BaseModel):
     username: str
     password: str
     email: str
-    phone: str
-    role: str   
+    phone: str  
 
 class RoleUpdate(BaseModel):
     username: str
@@ -120,6 +144,17 @@ class ReportPayload(BaseModel):
     metrics: ReportMetrics
     report: ReportDetails
 
+class AdCreate(BaseModel):
+    recruiter_key: str
+    company_name: str
+    job_title: str
+    description: str
+
+class ApplicationCreate(BaseModel):
+    candidate_username: str
+    ad_id: str
+    recruiter_key: str
+
 def hash_password(password: str):
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -130,6 +165,7 @@ def hash_password(password: str):
 # --- NEW: AUTHORIZED ADMIN SYSTEM CONFIG ---
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
 admin_otp_store = {}
+reset_otp_store = {}
 
 @app.post("/api/admins/verify-email")
 async def verify_admin_email(payload: AdminAuth):
@@ -222,15 +258,21 @@ async def get_all_global_interviews():
 
 # --- RECRUITER & CANDIDATE AUTH ENDPOINTS ---
 @app.post("/api/recruiters/register")
-async def register_recruiter(user: UserAuth):
+async def register_recruiter(user: RecruiterRegister):
     existing_user = await recruiters_collection.find_one({"username": user.username})
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already exists")
     
+    existing_email = await recruiters_collection.find_one({"email": user.email.lower()})
+    if existing_email:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
     recruiter_key = str(uuid.uuid4())[:6].upper()
     await recruiters_collection.insert_one({
         "username": user.username, 
         "password_hash": hash_password(user.password),
+        "email": user.email.lower(),
+        "company_name": user.company_name,
         "recruiter_key": recruiter_key
     })
     return {"message": "Recruiter registered successfully"}
@@ -240,7 +282,14 @@ async def login_recruiter(user: UserAuth):
     db_user = await recruiters_collection.find_one({"username": user.username})
     if not db_user or db_user["password_hash"] != hash_password(user.password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    return {"username": db_user["username"], "role": "recruiter"}
+    
+    # Return the company_name and recruiter_key so the frontend can use them!
+    return {
+        "username": db_user["username"], 
+        "role": "recruiter",
+        "company_name": db_user.get("company_name", "Unknown Company"),
+        "recruiter_key": db_user.get("recruiter_key", "")
+    }
 
 @app.get("/api/recruiters/{username}")
 async def get_recruiter_details(username: str):
@@ -256,20 +305,51 @@ async def get_recruiter_details(username: str):
     return {"recruiter_key": key}
 
 @app.delete("/api/recruiters/{username}")
-async def delete_recruiter(username: str):
-    db_recruiter = await recruiters_collection.find_one({"username": username})
-    if not db_recruiter:
+async def delete_recruiter_account(username: str):
+    user = await recruiters_collection.find_one({"username": username})
+    if not user:
         raise HTTPException(status_code=404, detail="Recruiter not found")
-    
-    recruiter_key = db_recruiter.get("recruiter_key")
-    if recruiter_key:
-        await candidates_collection.update_many(
-            {"linked_recruiter": recruiter_key},
-            {"$set": {"linked_recruiter": None, "recruiter_name": None}}
-        )
         
+    rec_key = user.get("recruiter_key")
+    
+    # 1. Cascade Delete: Wipe all of their ads and interviews
+    await advertisements_collection.delete_many({"recruiter_key": rec_key})
+    await interviews_collection.delete_many({"recruiter_key": rec_key})
+    
+    # 2. Unlink: Remove this recruiter from any candidate's approved list
+    await candidates_collection.update_many(
+        {"linked_recruiters.recruiter_key": rec_key},
+        {"$pull": {"linked_recruiters": {"recruiter_key": rec_key}}}
+    )
+    
+    # 3. Delete the actual recruiter account
     await recruiters_collection.delete_one({"username": username})
-    return {"message": "Recruiter account deleted successfully"}
+    return {"message": "Recruiter account and all associated data deleted successfully"}
+
+@app.get("/api/recruiters/{username}/profile")
+async def get_recruiter_profile(username: str):
+    user = await recruiters_collection.find_one({"username": username}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Recruiter not found")
+    return user
+
+@app.put("/api/recruiters/{username}/profile")
+async def update_recruiter_profile(username: str, payload: RecruiterProfileUpdate):
+    result = await recruiters_collection.update_one(
+        {"username": username},
+        {"$set": {"email": payload.email.lower(), "company_name": payload.company_name}}
+    )
+    
+    # We must also update any existing advertisements with the new company name
+    await advertisements_collection.update_many(
+        {"recruiter_key": username["recruiter_key"]},
+        {"$set": {"company_name": payload.company_name}}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Recruiter not found")
+    return {"message": "Profile updated successfully"}
+
 
 @app.post("/api/candidates/register")
 async def register_candidate(user: CandidateRegister):
@@ -280,11 +360,9 @@ async def register_candidate(user: CandidateRegister):
     await candidates_collection.insert_one({
         "username": user.username, 
         "password_hash": hash_password(user.password),
-        "email": user.email,
+        "email": user.email.lower(),
         "phone": user.phone,
-        "role": user.role,
-        "linked_recruiter": None,
-        "recruiter_name": None
+        "linked_recruiters": [] # Start with empty approvals
     })
     return {"message": "Candidate registered successfully"}
 
@@ -294,7 +372,124 @@ async def login_candidate(user: UserAuth):
     if not db_user or db_user["password_hash"] != hash_password(user.password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     return {"username": db_user["username"], "role": "candidate"}
+@app.post("/api/forgot-password/request")
+async def forgot_password_request(payload: ForgotPasswordRequest):
+    collection = recruiters_collection if payload.role == "recruiter" else candidates_collection
+    user = await collection.find_one({"email": payload.email.lower()})
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="Email not found in our system")
+    
+    otp = str(random.randint(100000, 999999))
+    reset_otp_store[f"{payload.role}_{payload.email.lower()}"] = otp
+    return {"generated_otp": otp, "message": "OTP generated"}
 
+@app.post("/api/forgot-password/reset")
+async def forgot_password_reset(payload: PasswordReset):
+    key = f"{payload.role}_{payload.email.lower()}"
+    
+    if key not in reset_otp_store or reset_otp_store[key] != payload.otp:
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+    
+    collection = recruiters_collection if payload.role == "recruiter" else candidates_collection
+    await collection.update_one(
+        {"email": payload.email.lower()},
+        {"$set": {"password_hash": hash_password(payload.new_password)}}
+    )
+    
+    del reset_otp_store[key] # Clean up OTP
+    return {"message": "Password updated successfully"}
+
+# ==========================================
+# JOB BOARD & APPLICATION ENDPOINTS
+# ==========================================
+
+@app.post("/api/advertisements")
+async def create_advertisement(ad: AdCreate):
+    ad_id = str(uuid.uuid4())[:8]
+    await advertisements_collection.insert_one({
+        "id": ad_id,
+        "recruiter_key": ad.recruiter_key,
+        "company_name": ad.company_name,
+        "job_title": ad.job_title,
+        "description": ad.description,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+    return {"message": "Advertisement created", "id": ad_id}
+
+@app.get("/api/advertisements")
+async def get_all_advertisements():
+    # Public endpoint for the landing page
+    ads = await advertisements_collection.find({}, {"_id": 0}).sort("created_at", -1).to_list(length=100)
+    return ads
+
+@app.post("/api/applications")
+async def apply_for_job(app: ApplicationCreate):
+    app_id = str(uuid.uuid4())[:8]
+    
+    # Check if already applied
+    existing = await applications_collection.find_one({
+        "candidate_username": app.candidate_username, 
+        "ad_id": app.ad_id
+    })
+    if existing:
+        return {"message": "Already applied"}
+        
+    await applications_collection.insert_one({
+        "id": app_id,
+        "candidate_username": app.candidate_username,
+        "ad_id": app.ad_id,
+        "recruiter_key": app.recruiter_key,
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+    return {"message": "Application submitted"}
+
+@app.get("/api/recruiters/{recruiter_key}/applications")
+async def get_recruiter_applications(recruiter_key: str):
+    # Get all pending applications for this recruiter
+    apps = await applications_collection.find({"recruiter_key": recruiter_key, "status": "pending"}, {"_id": 0}).to_list(length=100)
+    
+    # Enrich with Job Title and Candidate Email
+    enriched_apps = []
+    for app in apps:
+        ad = await advertisements_collection.find_one({"id": app["ad_id"]})
+        candidate = await candidates_collection.find_one({"username": app["candidate_username"]})
+        if ad and candidate:
+            app["job_title"] = ad["job_title"]
+            app["candidate_email"] = candidate.get("email", "N/A")
+            enriched_apps.append(app)
+            
+    return enriched_apps
+
+@app.post("/api/applications/{app_id}/approve")
+async def approve_application(app_id: str):
+    await applications_collection.update_one({"id": app_id}, {"$set": {"status": "approved"}})
+    
+    app_doc = await applications_collection.find_one({"id": app_id})
+    recruiter = await recruiters_collection.find_one({"recruiter_key": app_doc["recruiter_key"]})
+    ad = await advertisements_collection.find_one({"id": app_doc["ad_id"]}) # <-- Fetch the Ad
+    
+    if app_doc and recruiter and ad:
+        await candidates_collection.update_one(
+            {"username": app_doc["candidate_username"]},
+            {"$addToSet": {
+                "linked_recruiters": {
+                    "recruiter_key": recruiter["recruiter_key"],
+                    "company_name": recruiter["company_name"],
+                    "target_role": ad["job_title"] # <-- Lock in the applied role!
+                }
+            }}
+        )
+    return {"message": "Candidate approved and linked!"}
+
+@app.get("/api/candidates/{username}/links")
+async def get_candidate_links(username: str):
+    candidate = await candidates_collection.find_one({"username": username})
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    # Return the array of approved recruiters
+    return candidate.get("linked_recruiters", [])
 @app.post("/api/candidates/role")
 async def set_candidate_role(payload: RoleUpdate):
     result = await candidates_collection.update_one(
@@ -332,21 +527,45 @@ async def link_candidate_to_recruiter(payload: LinkPayload):
     )
     return {"recruiter_name": recruiter["username"]}
 
+@app.get("/api/candidates/{username}/profile")
+async def get_candidate_profile(username: str):
+    user = await candidates_collection.find_one({"username": username}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    return user
+
+@app.put("/api/candidates/{username}/profile")
+async def update_candidate_profile(username: str, payload: ProfileUpdate):
+    result = await candidates_collection.update_one(
+        {"username": username},
+        {"$set": {"email": payload.email.lower(), "phone": payload.phone}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    return {"message": "Profile updated successfully"}
+
 @app.get("/api/candidates")
 async def get_all_candidates(recruiter_key: str = None):
-    if not recruiter_key:
-        return [] 
+    if not recruiter_key: return [] 
         
-    cursor = candidates_collection.find({"linked_recruiter": recruiter_key}, {"_id": 0})
+    cursor = candidates_collection.find({"linked_recruiters.recruiter_key": recruiter_key}, {"_id": 0})
     users = await cursor.to_list(length=1000)
-    return [
-        {
+    
+    result = []
+    for u in users:
+        # Find the specific role they were approved for by THIS recruiter
+        target_role = "Unknown Role"
+        for link in u.get("linked_recruiters", []):
+            if link.get("recruiter_key") == recruiter_key:
+                target_role = link.get("target_role", "Unknown Role")
+                break
+                
+        result.append({
             "username": u["username"], 
             "email": u.get("email", ""), 
-            "phone": u.get("phone", ""), 
-            "role": u.get("role", "Not Selected")
-        } for u in users
-    ]
+            "target_role": target_role # <-- Pass it to the frontend
+        })
+    return result
 
 # ==========================================
 # FETCH & DELETE INTERVIEW ENDPOINTS
@@ -370,7 +589,8 @@ async def get_candidate_interviews(username: str, role: str = "candidate", recru
             "id": i["id"], 
             "target_role": i["target_role"],
             "created_at": i.get("created_at", datetime.now(timezone.utc).isoformat()),
-            "is_completed": report_exists
+            "is_completed": report_exists,
+            "recruiter_key": i.get("recruiter_key", "") # <-- This ensures the frontend doesn't crash!
         })
     return result
 
@@ -411,15 +631,15 @@ async def delete_interview(interview_id: str, role: str = "candidate"):
     return {"message": f"Interview session hidden for {role} successfully"}
 
 @app.delete("/api/candidates/{username}")
-async def delete_candidate(username: str):
-    db_candidate = await candidates_collection.find_one({"username": username})
-    if not db_candidate:
-        raise HTTPException(status_code=404, detail="Candidate not found")
-    
-    await reports_collection.delete_many({"candidate_name": username})
+async def delete_candidate_account(username: str):
+    # 1. Cascade Delete: Wipe all of their applications, interviews, and reports
+    await applications_collection.delete_many({"candidate_username": username})
     await interviews_collection.delete_many({"candidate_name": username})
+    await reports_collection.delete_many({"candidate_name": username})
+    
+    # 2. Delete the actual candidate account
     await candidates_collection.delete_one({"username": username})
-    return {"message": "Candidate and all associated data deleted successfully"}
+    return {"message": "Candidate account and all associated data deleted successfully"}
 
 # ==========================================
 # GEMINI GENERATION & EVALUATION

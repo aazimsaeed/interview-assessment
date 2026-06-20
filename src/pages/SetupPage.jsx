@@ -1,302 +1,304 @@
 import React, { useState, useEffect } from 'react';
 
 export default function SetupPage({ onStart, onBack, username, onViewReport }) {
-  const [isLinked, setIsLinked] = useState(null); 
-  const [recruiterName, setRecruiterName] = useState("");
-  const [linkedRecruiterKey, setLinkedRecruiterKey] = useState(""); 
-  const [keyInput, setKeyInput] = useState("");
-  const [isChangingKey, setIsChangingKey] = useState(false); 
+  // Navigation State
+  const [activeTab, setActiveTab] = useState('pending'); // 'profile', 'pending', 'history', 'jobs'
 
-  const [interviewId, setInterviewId] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [assignedInterviews, setAssignedInterviews] = useState([]);
-  const [showMenu, setShowMenu] = useState(false); 
+  // Data State
+  const [profile, setProfile] = useState({ email: '', phone: '' });
+  const [linkedCompanies, setLinkedCompanies] = useState([]); 
+  const [pendingInterviews, setPendingInterviews] = useState([]);
+  const [completedInterviews, setCompletedInterviews] = useState([]);
+  const [ads, setAds] = useState([]);
+  
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const API_BASE = "http://localhost:8000";
 
-  // Check link status on load
-  useEffect(() => {
-    if (username) {
-      fetch(`${API_BASE}/api/candidates/${username}/link_status`)
-        .then(res => res.json())
-        .then(data => {
-            if (data.is_linked) {
-                setRecruiterName(data.recruiter_name);
-                setLinkedRecruiterKey(data.recruiter_key);
-                setIsLinked(true);
-            } else {
-                setIsLinked(false);
-            }
-        })
-        .catch(err => console.error("Failed to check link status", err));
-    }
-  }, [username]);
-
-  // REAL-TIME POLLING FOR CANDIDATE (Assigned Links)
-  useEffect(() => {
-    if (!username || !isLinked || !linkedRecruiterKey) return;
-
-    const fetchInterviews = () => {
-      fetch(`${API_BASE}/api/candidates/${username}/interviews?role=candidate&recruiter_key=${linkedRecruiterKey}`)
-        .then(res => res.json())
-        .then(data => {
-          if (Array.isArray(data)) setAssignedInterviews(data);
-        })
-        .catch(err => console.error("Failed to fetch interviews", err));
-    };
-
-    fetchInterviews();
-    const intervalId = setInterval(fetchInterviews, 5000);
-    return () => clearInterval(intervalId);
-  }, [username, isLinked, linkedRecruiterKey]);
-
-  const handleLinkKey = async (e) => {
-      e.preventDefault();
-      if (!keyInput.trim()) return setError("Please enter a key.");
-      setLoading(true);
-      setError("");
-
-      try {
-          const res = await fetch(`${API_BASE}/api/candidates/link`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ username: username, recruiter_key: keyInput })
-          });
-          const data = await res.json();
-
-          if (!res.ok) throw new Error(data.detail);
-
-          setAssignedInterviews([]);
-          setRecruiterName(data.recruiter_name);
-          setLinkedRecruiterKey(keyInput);
-          setIsLinked(true);
-          setIsChangingKey(false); 
-          setKeyInput("");
-      } catch (err) {
-          setError(err.message);
-      } finally {
-          setLoading(false);
-      }
-  };
-
-  const handleJoin = async (idToJoin) => {
-    setLoading(true);
-    setError("");
-
+  // ==========================================
+  // DATA FETCHING
+  // ==========================================
+  const fetchDashboardData = async () => {
+    if (!username) return;
     try {
-      const response = await fetch(`${API_BASE}/api/interviews/${idToJoin}`);
-      const data = await response.json();
+      // 1. Fetch Profile
+      const profRes = await fetch(`${API_BASE}/api/candidates/${username}/profile`);
+      if (profRes.ok) setProfile(await profRes.json());
 
-      if (!response.ok) {
-        throw new Error(data.detail || "Could not find this interview.");
+      // 2. Fetch Links
+      const linksRes = await fetch(`${API_BASE}/api/candidates/${username}/links`);
+      const linksData = await linksRes.json();
+      setLinkedCompanies(Array.isArray(linksData) ? linksData : []);
+
+      // 3. Fetch Interviews & Split into Pending/Completed
+      const intRes = await fetch(`${API_BASE}/api/candidates/${username}/interviews?role=candidate`);
+      const intData = await intRes.json();
+      if (Array.isArray(intData)) {
+          setPendingInterviews(intData.filter(i => !i.is_completed));
+          setCompletedInterviews(intData.filter(i => i.is_completed));
       }
 
-      onStart({
-        id: idToJoin,
-        studentName: data.candidate_name,
-        targetRole: data.target_role,
-        questions: data.questions.join("\n")
-      });
+      // 4. Fetch Global Ads
+      const adsRes = await fetch(`${API_BASE}/api/advertisements`);
+      if (adsRes.ok) setAds(await adsRes.json());
+
     } catch (err) {
-      setError(err.message);
+      console.error("Dashboard Sync Error:", err);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDelete = async (idToDelete) => {
-    const confirmDelete = window.confirm("Are you sure you want to remove this assessment?");
-    if (!confirmDelete) return;
-    
+  useEffect(() => {
+    fetchDashboardData();
+    const intervalId = setInterval(fetchDashboardData, 10000); // 10s polling
+    return () => clearInterval(intervalId);
+  }, [username]);
+
+  // ==========================================
+  // ACTIONS
+  // ==========================================
+  const handleJoin = async (idToJoin) => {
     try {
-      const response = await fetch(`${API_BASE}/api/interviews/${idToDelete}?role=candidate`, { method: 'DELETE' });
-      if (response.ok) setAssignedInterviews(prev => prev.filter(inv => inv.id !== idToDelete));
-    } catch (err) {
-      setError(err.message);
-    }
+      const response = await fetch(`${API_BASE}/api/interviews/${idToJoin}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Could not find this interview.");
+      onStart({ id: idToJoin, studentName: data.candidate_name, targetRole: data.target_role, questions: data.questions.join("\n") });
+    } catch (err) { alert(err.message); } 
   };
 
+  const handleUpdateProfile = async (e) => {
+      e.preventDefault();
+      setSaving(true);
+      try {
+          const res = await fetch(`${API_BASE}/api/candidates/${username}/profile`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: profile.email, phone: profile.phone })
+          });
+          if(res.ok) alert("Profile updated successfully!");
+          else alert("Failed to update profile.");
+      } catch (err) { alert("Error saving profile."); }
+      finally { setSaving(false); }
+  };
+
+  const handleApplyToJob = async (ad) => {
+      try {
+          const res = await fetch(`${API_BASE}/api/applications`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ candidate_username: username, ad_id: ad.id, recruiter_key: ad.recruiter_key })
+          });
+          const data = await res.json();
+          if (res.ok) alert(`Application sent to ${ad.company_name}! Check your pending tab later for the assessment.`);
+          else alert(data.message || "Failed to apply.");
+      } catch (err) { alert("Error applying to job."); }
+  };
+
+  if (loading) return <div className="shell flex-center" style={{height: '100vh', color: '#38bdf8'}}><h2>Loading Workspace...</h2></div>;
+
   const handleDeleteAccount = async () => {
-      if (!window.confirm("Are you sure you want to permanently delete your account?")) return;
+      const confirmDelete = window.confirm("Are you sure you want to permanently delete your account? All of your applications, interviews, and reports will be lost.");
+      if (!confirmDelete) return;
+
       try {
           const res = await fetch(`${API_BASE}/api/candidates/${username}`, { method: 'DELETE' });
-          if (res.ok) onBack(); 
-          else alert("Failed to delete account.");
+          if (res.ok) {
+              alert("Account deleted successfully.");
+              onBack(); // Routes back to landing page
+          } else {
+              alert("Failed to delete account.");
+          }
       } catch (err) { alert("Error deleting account."); }
   };
 
-  const handleManualSubmit = (e) => {
-    e.preventDefault();
-    if (!interviewId.trim()) return setError("Please enter an ID");
-    handleJoin(interviewId);
-  };
-
-  if (isLinked === null) {
-      return <div className="shell flex-center"><h2>Loading portal...</h2></div>;
-  }
-
-  // --- GATEKEEPER VIEW ---
-  if (isLinked === false) {
-      return (
-        <div className="shell" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', padding: '20px' }}>
-            <div className="card" style={{ padding: '40px', maxWidth: '500px', width: '100%', textAlign: 'center' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                    <h1 style={{ margin: 0 }}>Connect Account</h1>
-                    
-                    <div style={{ position: 'relative' }}>
-                        <button className="btn" onClick={() => setShowMenu(!showMenu)} style={{ padding: '10px 15px', fontSize: '1.2rem' }}>⋮</button>
-                        {showMenu && (
-                            <div style={{ position: 'absolute', right: 0, top: '45px', background: '#1e293b', border: '1px solid #334155', borderRadius: '8px', padding: '10px', zIndex: 100, display: 'flex', flexDirection: 'column', gap: '5px', minWidth: '160px', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }}>
-                                <button className="btn" onClick={onBack} style={{ width: '100%', textAlign: 'left', border: 'none', background: 'transparent', color: '#f8fafc' }}>🚪 Logout</button>
-                                <button className="btn" onClick={handleDeleteAccount} style={{ width: '100%', textAlign: 'left', border: 'none', background: 'transparent', color: '#ef4444' }}>🗑️ Delete Account</button>
-                            </div>
-                        )}
-                    </div>
-                </div>
-                
-                <p style={{ color: '#94a3b8', marginBottom: '30px' }}>
-                    Welcome, <strong>{username}</strong>. To access your assessments, please enter the personal 6-character Key provided by your recruiter.
-                </p>
-
-                {error && <div style={{ color: '#ef4444', marginBottom: '15px', padding: '10px', background: '#451a1e', borderRadius: '6px' }}>{error}</div>}
-
-                <form onSubmit={handleLinkKey} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                    <input type="text" className="input" placeholder="e.g. A7B29F" value={keyInput} onChange={e => setKeyInput(e.target.value.toUpperCase())} style={{ fontSize: '1.2rem', textAlign: 'center', letterSpacing: '3px' }} maxLength={6} />
-                    <button type="submit" className="btn primary" disabled={loading} style={{ padding: '15px' }}>{loading ? "Verifying..." : "Connect to Recruiter"}</button>
-                </form>
-            </div>
-        </div>
-      );
-  }
-
-  // --- MAIN PORTAL ---
+  // ==========================================
+  // RENDER UI
+  // ==========================================
   return (
-    <div className="shell" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', padding: '20px' }}>
-      <div className="card" style={{ padding: '40px', maxWidth: '600px', width: '100%' }}>
+    <div style={{ display: 'flex', height: '100vh', background: '#020617', color: '#f8fafc', fontFamily: 'sans-serif' }}>
+      
+      {/* SIDEBAR NAVIGATION */}
+      <div style={{ width: '280px', background: '#0f172a', borderRight: '1px solid #1e293b', display: 'flex', flexDirection: 'column', padding: '30px 20px' }}>
+        <h2 style={{ color: '#38bdf8', fontSize: '1.5rem', marginBottom: '40px', textAlign: 'center' }}>{username}'s Dashboard</h2>
         
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-          <h1 style={{ margin: 0 }}>Candidate Portal</h1>
-          
-          <div style={{ position: 'relative' }}>
-              <button className="btn" onClick={() => setShowMenu(!showMenu)} style={{ padding: '10px 15px', fontSize: '1.2rem' }}>⋮</button>
-              {showMenu && (
-                  <div style={{ position: 'absolute', right: 0, top: '45px', background: '#1e293b', border: '1px solid #334155', borderRadius: '8px', padding: '10px', zIndex: 100, display: 'flex', flexDirection: 'column', gap: '5px', minWidth: '160px', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }}>
-                      <button className="btn" onClick={onBack} style={{ width: '100%', textAlign: 'left', border: 'none', background: 'transparent', color: '#f8fafc' }}>🚪 Logout</button>
-                      <button className="btn" onClick={handleDeleteAccount} style={{ width: '100%', textAlign: 'left', border: 'none', background: 'transparent', color: '#ef4444' }}>🗑️ Delete Account</button>
-                  </div>
-              )}
-          </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', flex: 1 }}>
+            <button onClick={() => setActiveTab('pending')} style={{ ...sidebarBtnStyle, background: activeTab === 'pending' ? '#1e293b' : 'transparent', borderLeft: activeTab === 'pending' ? '4px solid #38bdf8' : '4px solid transparent' }}>
+                ⏳ Pending Assessments
+                {pendingInterviews.length > 0 && <span style={badgeStyle}>{pendingInterviews.length}</span>}
+            </button>
+            <button onClick={() => setActiveTab('history')} style={{ ...sidebarBtnStyle, background: activeTab === 'history' ? '#1e293b' : 'transparent', borderLeft: activeTab === 'history' ? '4px solid #38bdf8' : '4px solid transparent' }}>
+                ✅ Interview History
+            </button>
+            <button onClick={() => setActiveTab('jobs')} style={{ ...sidebarBtnStyle, background: activeTab === 'jobs' ? '#1e293b' : 'transparent', borderLeft: activeTab === 'jobs' ? '4px solid #38bdf8' : '4px solid transparent' }}>
+                🌍 Explore Jobs
+            </button>
+            <button onClick={() => setActiveTab('profile')} style={{ ...sidebarBtnStyle, background: activeTab === 'profile' ? '#1e293b' : 'transparent', borderLeft: activeTab === 'profile' ? '4px solid #38bdf8' : '4px solid transparent' }}>
+                👤 My Profile
+            </button>
         </div>
 
-        {!isChangingKey ? (
-            <div style={{ marginBottom: '20px', background: 'linear-gradient(145deg, #0f172a, #1e293b)', padding: '20px', borderRadius: '12px', border: '1px solid #38bdf8', boxShadow: '0 4px 15px rgba(56, 189, 248, 0.1)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div>
-                        <p style={{ color: '#94a3b8', margin: '0 0 5px 0', fontSize: '13px' }}>CANDIDATE</p>
-                        <p style={{ color: '#f8fafc', margin: '0 0 15px 0', fontSize: '1.1rem' }}><strong>{username}</strong></p>
-                        
-                        <p style={{ color: '#94a3b8', margin: '0 0 5px 0', fontSize: '13px' }}>ASSESSMENT SENT BY</p>
-                        <p style={{ color: '#38bdf8', margin: 0, fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            ✅ <strong>{recruiterName}</strong>
-                        </p>
-                    </div>
-                    <button className="btn" onClick={() => setIsChangingKey(true)} style={{ padding: '8px 12px', fontSize: '12px', background: 'rgba(255,255,255,0.05)', color: '#94a3b8', border: '1px solid #334155' }}>
-                        Change Link
-                    </button>
+        <button onClick={onBack} style={{ ...sidebarBtnStyle, color: '#ef4444', marginTop: 'auto' }}>🚪 Logout</button>
+      </div>
+
+      {/* MAIN CONTENT AREA */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '50px 60px' }}>
+        
+        <div style={{ marginBottom: '40px' }}>
+          <h1 style={{ fontSize: '2.5rem', margin: '0 0 10px 0', color: '#f8fafc' }}>
+            {activeTab === 'pending' && "Pending Assessments"}
+            {activeTab === 'history' && "Your Interview History"}
+            {activeTab === 'jobs' && "Explore Opportunities"}
+            {activeTab === 'profile' && "Profile Settings"}
+          </h1>
+          <p style={{ color: '#94a3b8', fontSize: '1.1rem', margin: 0 }}>
+             {activeTab === 'pending' && "Interviews that require your attention."}
+             {activeTab === 'history' && "Review reports and feedback from past interviews."}
+             {activeTab === 'jobs' && "Apply for new roles to generate more assessments."}
+             {activeTab === 'profile' && "Manage your personal information and connections."}
+          </p>
+        </div>
+
+        {/* TAB: PENDING */}
+        {activeTab === 'pending' && (
+          <div>
+             {pendingInterviews.length === 0 ? (
+                <div style={emptyStateStyle}>You're all caught up! Browse the Jobs tab to find new opportunities.</div>
+             ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '20px' }}>
+                    {pendingInterviews.map(inv => {
+                        const company = linkedCompanies.find(c => c.recruiter_key === inv.recruiter_key)?.company_name || "Unknown Company";
+                        return (
+                            <div key={inv.id} style={cardStyle}>
+                                <div>
+                                    <span style={companyTagStyle}>{company}</span>
+                                    <h3 style={{ margin: '10px 0', fontSize: '1.5rem', color: '#f8fafc' }}>{inv.target_role}</h3>
+                                    <p style={{ margin: 0, color: '#64748b' }}>Assigned: {new Date(inv.created_at).toLocaleDateString()}</p>
+                                </div>
+                                <button className="btn primary" onClick={() => handleJoin(inv.id)} style={{ padding: '15px 30px', background: '#22c55e', border: 'none', fontSize: '1.1rem', borderRadius: '8px' }}>
+                                    Start Interview ▶
+                                </button>
+                            </div>
+                        );
+                    })}
                 </div>
-            </div>
-        ) : (
-            <div style={{ marginBottom: '20px', background: '#0f172a', padding: '20px', borderRadius: '8px', border: '1px solid #1e293b' }}>
-                <h3 style={{ margin: '0 0 10px 0', color: '#f8fafc' }}>Connect to a New Recruiter</h3>
-                <form onSubmit={handleLinkKey} style={{ display: 'flex', gap: '10px' }}>
-                    <input type="text" className="input" placeholder="New Key (e.g. A7B29F)" value={keyInput} onChange={e => setKeyInput(e.target.value.toUpperCase())} maxLength={6} style={{ flex: 1, letterSpacing: '2px' }} />
-                    <button type="submit" className="btn primary" disabled={loading} style={{ padding: '10px 20px' }}>Connect</button>
-                    <button type="button" className="btn" onClick={() => setIsChangingKey(false)} style={{ background: '#1e293b', color: '#94a3b8' }}>Cancel</button>
-                </form>
-            </div>
+             )}
+          </div>
         )}
 
-        {error && <div style={{ color: '#ef4444', marginBottom: '15px', padding: '10px', background: '#451a1e', borderRadius: '6px' }}>{error}</div>}
+        {/* TAB: HISTORY */}
+        {activeTab === 'history' && (
+          <div>
+             {completedInterviews.length === 0 ? (
+                <div style={emptyStateStyle}>No completed interviews yet.</div>
+             ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '20px' }}>
+                    {completedInterviews.map(inv => {
+                        const company = linkedCompanies.find(c => c.recruiter_key === inv.recruiter_key)?.company_name || "Unknown Company";
+                        return (
+                            <div key={inv.id} style={{ ...cardStyle, borderLeft: '4px solid #8b5cf6' }}>
+                                <div>
+                                    <span style={companyTagStyle}>{company}</span>
+                                    <h3 style={{ margin: '10px 0', fontSize: '1.5rem', color: '#f8fafc' }}>{inv.target_role}</h3>
+                                    <p style={{ margin: 0, color: '#64748b' }}>Completed Session</p>
+                                </div>
+                                <button className="btn primary" onClick={async () => {
+                                    try {
+                                        const res = await fetch(`${API_BASE}/api/reports/${inv.id}`);
+                                        if(res.ok) onViewReport(await res.json());
+                                    } catch (e) { alert("Failed to load report."); }
+                                }} style={{ padding: '15px 30px', background: '#8b5cf6', border: 'none', fontSize: '1.1rem', borderRadius: '8px' }}>
+                                    View Detailed Report 📄
+                                </button>
+                            </div>
+                        );
+                    })}
+                </div>
+             )}
+          </div>
+        )}
 
-        {assignedInterviews.length > 0 ? (
-          <div style={{ marginBottom: '30px' }}>
-            <h3 style={{ color: '#e6edf3', marginBottom: '10px' }}>Your Assigned Interviews</h3>
-            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {assignedInterviews.map((inv, index) => (
-                <li key={inv.id} style={{ background: '#0f172a', padding: '20px', borderRadius: '8px', border: '1px solid #1e293b', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '15px' }}>
-                  
-                  <div>
-                    <div style={{ fontWeight: 'bold', color: '#38bdf8', fontSize: '1.2rem' }}>
-                      Assessment {index + 1}: {inv.target_role}
-                    </div>
-                    <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: '6px' }}>
-                      <strong>Created:</strong> {new Date(inv.created_at).toLocaleDateString()}
-                    </div>
-                    <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '2px' }}>
-                      <strong>Session ID:</strong> {inv.id}
-                    </div>
-                    {/* NEW: DISPLAY THE RECRUITER NAME ON EVERY LIST ITEM/ASSESSMENT */}
-                    <div style={{ fontSize: '0.9rem', color: '#38bdf8', marginTop: '8px', padding: '4px 8px', background: 'rgba(56, 189, 248, 0.1)', borderRadius: '4px', display: 'inline-block' }}>
-                      ✅ <strong>Sent by:</strong> {recruiterName}
-                    </div>
-                  </div>
-                  
-                  <div style={{ display: 'flex', gap: '10px' }}>
-                    {inv.is_completed ? (
-                      <button 
-                        className="btn" 
-                        onClick={async () => {
-                          try {
-                             const res = await fetch(`${API_BASE}/api/reports/${inv.id}`);
-                             const data = await res.json();
-                             if(res.ok) onViewReport(data);
-                          } catch (e) { setError("Failed to load report from server."); }
-                        }}
-                        style={{ padding: '12px 20px', background: '#38bdf8', color: '#0f172a', fontWeight: 'bold' }}
-                      >
-                        View Report
-                      </button>
-                    ) : (
-                      <button 
-                        className="btn primary" 
-                        disabled={loading} 
-                        onClick={() => handleJoin(inv.id)}
-                        style={{ padding: '12px 20px', background: '#22c55e', color: '#fff', borderColor: '#16a34a' }}
-                      >
-                        Join
-                      </button>
-                    )}
-                    
-                    <button 
-                        className="btn" 
-                        disabled={loading} 
-                        onClick={() => handleDelete(inv.id)}
-                        style={{ padding: '12px', background: '#ef4444', color: '#fff', borderColor: '#b91c1c' }}
-                        title="Remove Assessment"
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                </li>
+        {/* TAB: JOBS */}
+        {activeTab === 'jobs' && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '25px' }}>
+             {ads.map((ad) => (
+                <div key={ad.id} style={{ background: '#1e293b', padding: '25px', borderRadius: '16px', border: '1px solid #334155', display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ fontSize: '0.85rem', color: '#38bdf8', fontWeight: 'bold', marginBottom: '5px', textTransform: 'uppercase' }}>{ad.company_name}</div>
+                  <h3 style={{ fontSize: '1.4rem', margin: '0 0 15px 0', color: '#f8fafc' }}>{ad.job_title}</h3>
+                  <p style={{ color: '#94a3b8', fontSize: '0.95rem', lineHeight: '1.5', flex: 1, marginBottom: '20px' }}>{ad.description}</p>
+                  <button onClick={() => handleApplyToJob(ad)} className="btn primary" style={{ width: '100%', padding: '12px', borderRadius: '8px', background: '#38bdf8', color: '#0f172a', fontWeight: 'bold', border: 'none' }}>
+                    1-Click Apply
+                  </button>
+                </div>
               ))}
-            </ul>
-          </div>
-        ) : (
-          <div style={{ background: '#0f172a', padding: '20px', borderRadius: '8px', textAlign: 'center', marginBottom: '30px', border: '1px solid #1e293b' }}>
-            <p style={{ color: '#94a3b8', margin: 0 }}>No pending interviews assigned by this recruiter.</p>
           </div>
         )}
 
-        <hr style={{ borderColor: '#1e293b', margin: '20px 0' }} />
+        {/* TAB: PROFILE */}
+        {activeTab === 'profile' && (
+          <div style={{ maxWidth: '600px' }}>
+             
+             {/* Read-Only Status */}
+             <div style={{ background: '#1e293b', padding: '25px', borderRadius: '12px', border: '1px solid #334155', marginBottom: '30px' }}>
+                 <p style={{ margin: '0 0 5px 0', color: '#94a3b8' }}>Username (Immutable)</p>
+                 <h2 style={{ margin: 0, color: '#f8fafc' }}>{username}</h2>
+             </div>
 
-        <h3 style={{ color: '#9fb0c3', marginBottom: '10px', fontSize: '0.9rem' }}>Or enter an Interview ID manually:</h3>
-        <form onSubmit={handleManualSubmit} style={{ display: 'flex', gap: '10px' }}>
-          <input type="text" className="input" placeholder="e.g. 8f7a9c2b" value={interviewId} onChange={e => setInterviewId(e.target.value)} style={{ flex: 1 }} />
-          <button type="submit" className="btn" disabled={loading} style={{ padding: '12px 20px' }}>{loading ? "..." : "Join"}</button>
-        </form>
+             {/* Editable Form */}
+             <div style={{ background: '#0f172a', padding: '30px', borderRadius: '12px', border: '1px solid #334155' }}>
+                 <h3 style={{ margin: '0 0 20px 0', color: '#e2e8f0' }}>Contact Information</h3>
+                 <form onSubmit={handleUpdateProfile} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                     <div>
+                         <label style={{ display: 'block', marginBottom: '8px', color: '#94a3b8' }}>Email Address</label>
+                         <input type="email" required className="input" value={profile.email} onChange={e => setProfile({...profile, email: e.target.value})} style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', padding: '12px', color: '#f8fafc' }} />
+                     </div>
+                     <div>
+                         <label style={{ display: 'block', marginBottom: '8px', color: '#94a3b8' }}>Phone Number</label>
+                         <input type="tel" required className="input" value={profile.phone} onChange={e => setProfile({...profile, phone: e.target.value})} style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', padding: '12px', color: '#f8fafc' }} />
+                     </div>
+                     <button type="submit" className="btn primary" disabled={saving} style={{ padding: '15px', background: '#38bdf8', color: '#0f172a', fontWeight: 'bold', border: 'none', borderRadius: '8px' }}>
+                         {saving ? "Saving..." : "Save Changes"}
+                     </button>
+                 </form>
+             </div>
+
+             {/* Connections List */}
+             <div style={{ marginTop: '30px', marginBottom: '40px' }}>
+                 <h3 style={{ color: '#94a3b8', textTransform: 'uppercase', fontSize: '13px', marginBottom: '15px' }}>Approved Company Links</h3>
+                 {linkedCompanies.length === 0 ? (
+                     <p style={{ color: '#64748b' }}>No connections yet.</p>
+                 ) : (
+                     <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                        {linkedCompanies.map((comp, i) => (
+                            <div key={i} style={{ background: 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.3)', color: '#22c55e', padding: '8px 16px', borderRadius: '20px', fontSize: '14px' }}>
+                                ✅ {comp.company_name}
+                            </div>
+                        ))}
+                     </div>
+                 )}
+             </div>
+
+             {/* DANGER ZONE */}
+             <div style={{ background: 'rgba(239, 68, 68, 0.05)', padding: '30px', borderRadius: '12px', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
+                <h3 style={{ margin: '0 0 10px 0', color: '#ef4444' }}>Delete Account</h3>
+                <p style={{ margin: '0 0 20px 0', color: '#94a3b8', fontSize: '14px' }}>Permanently delete your profile and all associated data.</p>
+                <button onClick={handleDeleteAccount} className="btn" style={{ background: '#7f1d1d', color: '#fca5a5', border: '1px solid #ef4444', padding: '12px 25px', borderRadius: '8px', width: '100%' }}>
+                  🗑️ Delete Account
+                </button>
+             </div>
+
+          </div>
+        )}
 
       </div>
     </div>
   );
 }
+
+// Inline Styles for Dashboard Components
+const sidebarBtnStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '15px 20px', textAlign: 'left', border: 'none', outline: 'none', color: '#e2e8f0', fontSize: '1rem', cursor: 'pointer', borderRadius: '0 8px 8px 0', transition: 'all 0.2s ease' };
+const badgeStyle = { background: '#ef4444', color: 'white', padding: '2px 8px', borderRadius: '12px', fontSize: '12px', fontWeight: 'bold' };
+const emptyStateStyle = { background: '#1e293b', padding: '40px', borderRadius: '12px', textAlign: 'center', color: '#94a3b8', fontSize: '1.2rem', border: '1px dashed #475569' };
+const cardStyle = { background: '#1e293b', padding: '30px', borderRadius: '16px', border: '1px solid #334155', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' };
+const companyTagStyle = { padding: '4px 10px', background: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '1px' };

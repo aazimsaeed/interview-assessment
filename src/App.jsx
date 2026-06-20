@@ -14,6 +14,8 @@ export default function App() {
   // Global App State
   const [currentPage, setCurrentPage] = useState("landing");
   const [authRole, setAuthRole] = useState(() => localStorage.getItem("authRole") || null);
+  const [recruiterKey, setRecruiterKey] = useState(() => localStorage.getItem("recruiterKey") || "");
+  const [companyName, setCompanyName] = useState(() => localStorage.getItem("companyName") || "");
   
   // Separate Usernames
   const [recruiterUsername, setRecruiterUsername] = useState(() => localStorage.getItem("recruiterUsername") || "");
@@ -69,18 +71,31 @@ export default function App() {
   }, [currentPage, authRole]);
 
   // --- ROUTING LOGIC ---
-  const handleLogin = (loggedInUsername) => {
+  const handleLogin = (data) => {
+    // Extract username whether it's an old string format or the new object format
+    const loggedInUsername = typeof data === 'string' ? data : data.username;
+    
     localStorage.setItem("authRole", authRole); 
 
     if (authRole === "recruiter") {
       setRecruiterUsername(loggedInUsername);
       localStorage.setItem("recruiterUsername", loggedInUsername);
-      navigate("recruiter-options"); 
-    }else if (authRole === "admin") { // <-- ADDED ADMIN LOGIC
+      
+      // Save the Company Name and Recruiter Key to memory
+      const rKey = data.recruiter_key || "";
+      const cName = data.company_name || "Unknown Company";
+      
+      setRecruiterKey(rKey);
+      setCompanyName(cName);
+      localStorage.setItem("recruiterKey", rKey);
+      localStorage.setItem("companyName", cName);
+      
+      navigate("interviewer-dashboard"); 
+    } else if (authRole === "admin") {
       setAdminUsername(loggedInUsername);
       localStorage.setItem("adminUsername", loggedInUsername);
       navigate("admin-dashboard");
-    }else {
+    } else {
       setCandidateUsername(loggedInUsername);
       localStorage.setItem("candidateUsername", loggedInUsername);
       navigate("setup");
@@ -114,17 +129,17 @@ export default function App() {
         <LandingPage 
           onStartCandidate={() => { 
             setAuthRole("candidate"); 
-            localStorage.setItem("authRole", "candidate"); // <-- ADD THIS
+            localStorage.setItem("authRole", "candidate"); 
             navigate("auth"); 
           }}
           onStartRecruiter={() => { 
             setAuthRole("recruiter"); 
-            localStorage.setItem("authRole", "recruiter"); // <-- ADD THIS
+            localStorage.setItem("authRole", "recruiter"); 
             navigate("auth"); 
           }}
           onStartAdmin={() => { 
             setAuthRole("admin"); 
-            localStorage.setItem("authRole", "admin"); // <-- ADD THIS
+            localStorage.setItem("authRole", "admin"); // <-- This ensures it doesn't refresh to Candidate!
             navigate("auth"); 
           }} 
         />
@@ -163,13 +178,14 @@ export default function App() {
 
       {authRole === "recruiter" && currentPage === "interviewer-dashboard" && (
         <InterviewerDashboard 
-          username={recruiterUsername}
-          format={interviewFormat} 
-          onBack={handleLogout} // Hooked directly to the complete logout
+          username={recruiterUsername} 
+          recruiterKey={recruiterKey} 
+          companyName={companyName} 
+          onBack={handleLogout}
           onViewReport={(fetchedReport) => {
             setReportData(fetchedReport);
             navigate("dashboard");
-          }}
+          }} 
         />
       )}
 
