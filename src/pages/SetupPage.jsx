@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import emailjs from '@emailjs/browser';
 
 export default function SetupPage({ onStart, onBack, username, onViewReport }) {
   // Navigation State
@@ -6,6 +7,11 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
 
   // Data State
   const [profile, setProfile] = useState({ email: '', phone: '' });
+  const [initialEmail, setInitialEmail] = useState("");
+  const [updateOtp, setUpdateOtp] = useState("");
+  const [showOtpField, setShowOtpField] = useState(false);
+  const [sendingOtp, setSendingOtp] = useState(false);
+
   const [linkedCompanies, setLinkedCompanies] = useState([]); 
   const [pendingInterviews, setPendingInterviews] = useState([]);
   const [completedInterviews, setCompletedInterviews] = useState([]);
@@ -16,6 +22,11 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
 
   const API_BASE = "http://localhost:8000";
 
+  // EMAILJS CONFIGURATION
+  const EMAILJS_SERVICE_ID = "service_rvp9rub"; 
+  const EMAILJS_TEMPLATE_ID = "template_d0bdb6h";
+  const EMAILJS_PUBLIC_KEY = "z_z2F1e4quN7sEzkd";
+
   // ==========================================
   // DATA FETCHING
   // ==========================================
@@ -24,7 +35,14 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
     try {
       // 1. Fetch Profile
       const profRes = await fetch(`${API_BASE}/api/candidates/${username}/profile`);
-      if (profRes.ok) setProfile(await profRes.json());
+      if (profRes.ok) {
+          const profData = await profRes.json();
+          // Only update initial email if we aren't currently in the middle of editing it
+          if (!showOtpField && updateOtp === "") {
+              setInitialEmail(profData.email || '');
+              setProfile(profData);
+          }
+      }
 
       // 2. Fetch Links
       const linksRes = await fetch(`${API_BASE}/api/candidates/${username}/links`);
@@ -57,7 +75,7 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
   }, [username]);
 
   // ==========================================
-  // ACTIONS
+  // ACTIONS & OTP VERIFICATION
   // ==========================================
   const handleJoin = async (idToJoin) => {
     try {
@@ -66,21 +84,6 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
       if (!response.ok) throw new Error(data.detail || "Could not find this interview.");
       onStart({ id: idToJoin, studentName: data.candidate_name, targetRole: data.target_role, questions: data.questions.join("\n") });
     } catch (err) { alert(err.message); } 
-  };
-
-  const handleUpdateProfile = async (e) => {
-      e.preventDefault();
-      setSaving(true);
-      try {
-          const res = await fetch(`${API_BASE}/api/candidates/${username}/profile`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ email: profile.email, phone: profile.phone })
-          });
-          if(res.ok) alert("Profile updated successfully!");
-          else alert("Failed to update profile.");
-      } catch (err) { alert("Error saving profile."); }
-      finally { setSaving(false); }
   };
 
   const handleApplyToJob = async (ad) => {
@@ -96,7 +99,63 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
       } catch (err) { alert("Error applying to job."); }
   };
 
-  if (loading) return <div className="shell flex-center" style={{height: '100vh', color: '#38bdf8'}}><h2>Loading Workspace...</h2></div>;
+  const emailChanged = profile.email !== initialEmail;
+
+  const handleRequestProfileOtp = async () => {
+      setSendingOtp(true);
+      try {
+          const response = await fetch(`${API_BASE}/api/profile/request-otp`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email: profile.email, role: "candidate", username })
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.detail || "Failed to generate OTP.");
+
+          if (data.otp_for_testing) {
+              try {
+                  await emailjs.send(
+                      EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID,
+                      { to_email: profile.email, otp_code: data.otp_for_testing },
+                      EMAILJS_PUBLIC_KEY
+                  );
+                  alert("Verification code sent to your new email! Check your inbox.");
+              } catch (emailErr) {
+                  console.error("EmailJS Error:", emailErr);
+                  alert(`⚠️ EmailJS failed. For testing, your OTP is: ${data.otp_for_testing}`);
+              }
+          }
+          setShowOtpField(true);
+      } catch (err) { alert(err.message); } 
+      finally { setSendingOtp(false); }
+  };
+
+  const handleUpdateProfile = async (e) => {
+      e.preventDefault();
+
+      if (emailChanged && !updateOtp) {
+          return alert("You must request and enter an OTP to verify your new email address.");
+      }
+
+      setSaving(true);
+      try {
+          const res = await fetch(`${API_BASE}/api/candidates/${username}/profile`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: profile.email, phone: profile.phone, otp: updateOtp })
+          });
+          const data = await res.json();
+          if(res.ok) {
+              alert("Profile updated successfully!");
+              setInitialEmail(profile.email);
+              setShowOtpField(false);
+              setUpdateOtp("");
+          } else {
+              alert(data.detail || "Failed to update profile.");
+          }
+      } catch (err) { alert("Error saving profile."); }
+      finally { setSaving(false); }
+  };
 
   const handleDeleteAccount = async () => {
       const confirmDelete = window.confirm("Are you sure you want to permanently delete your account? All of your applications, interviews, and reports will be lost.");
@@ -112,6 +171,8 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
           }
       } catch (err) { alert("Error deleting account."); }
   };
+
+  if (loading) return <div className="shell flex-center" style={{height: '100vh', color: '#38bdf8'}}><h2>Loading Workspace...</h2></div>;
 
   // ==========================================
   // RENDER UI
@@ -156,7 +217,7 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
              {activeTab === 'pending' && "Interviews that require your attention."}
              {activeTab === 'history' && "Review reports and feedback from past interviews."}
              {activeTab === 'jobs' && "Apply for new roles to generate more assessments."}
-             {activeTab === 'profile' && "Manage your personal information and connections."}
+             {activeTab === 'profile' && "Manage your personal information securely."}
           </p>
         </div>
 
@@ -219,73 +280,113 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
           </div>
         )}
 
-        {/* TAB: JOBS */}
+        {/* TAB: JOBS (NEW BEAUTIFUL LAYOUT) */}
         {activeTab === 'jobs' && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '25px' }}>
-             {ads.map((ad) => (
-                <div key={ad.id} style={{ background: '#1e293b', padding: '25px', borderRadius: '16px', border: '1px solid #334155', display: 'flex', flexDirection: 'column' }}>
-                  <div style={{ fontSize: '0.85rem', color: '#38bdf8', fontWeight: 'bold', marginBottom: '5px', textTransform: 'uppercase' }}>{ad.company_name}</div>
-                  <h3 style={{ fontSize: '1.4rem', margin: '0 0 15px 0', color: '#f8fafc' }}>{ad.job_title}</h3>
-                  <p style={{ color: '#94a3b8', fontSize: '0.95rem', lineHeight: '1.5', flex: 1, marginBottom: '20px' }}>{ad.description}</p>
-                  <button onClick={() => handleApplyToJob(ad)} className="btn primary" style={{ width: '100%', padding: '12px', borderRadius: '8px', background: '#38bdf8', color: '#0f172a', fontWeight: 'bold', border: 'none' }}>
-                    1-Click Apply
-                  </button>
+          <div>
+            {ads.length === 0 ? (
+                <div style={emptyStateStyle}>No global opportunities currently available. Check back soon.</div>
+            ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '30px' }}>
+                {ads.map((ad) => (
+                    <div key={ad.id} style={{ background: 'linear-gradient(145deg, #1e293b, #0f172a)', padding: '30px', borderRadius: '20px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', transition: 'all 0.3s ease', cursor: 'pointer', boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }} onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-8px)'; e.currentTarget.style.borderColor = '#38bdf8'; e.currentTarget.style.boxShadow = '0 15px 35px rgba(56, 189, 248, 0.15)'; }} onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.borderColor = '#334155'; e.currentTarget.style.boxShadow = '0 10px 30px rgba(0,0,0,0.2)'; }}>
+                    
+                    {/* Company Badge & Info */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '15px', marginBottom: '20px' }}>
+                        <div style={{ width: '50px', height: '50px', borderRadius: '12px', background: 'linear-gradient(135deg, #8b5cf6, #38bdf8)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem', fontWeight: 'bold', color: 'white' }}>
+                        {ad.company_name.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                        <h2 style={{ fontSize: '1.2rem', margin: 0, color: '#e2e8f0' }}>{ad.company_name}</h2>
+                        <span style={{ fontSize: '0.85rem', color: '#64748b' }}>Posted {new Date(ad.created_at).toLocaleDateString()}</span>
+                        </div>
+                    </div>
+
+                    {/* Job Title & Tags */}
+                    <h3 style={{ fontSize: '1.6rem', color: '#f8fafc', margin: '0 0 15px 0' }}>{ad.job_title}</h3>
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+                        <span style={{ padding: '6px 12px', background: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 'bold' }}>Full-Time</span>
+                        <span style={{ padding: '6px 12px', background: 'rgba(34, 197, 94, 0.1)', color: '#22c55e', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 'bold' }}>Remote</span>
+                    </div>
+
+                    {/* Description */}
+                    <p style={{ color: '#94a3b8', fontSize: '1rem', lineHeight: '1.6', flex: 1, marginBottom: '25px', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: '3', WebkitBoxOrient: 'vertical' }}>
+                        {ad.description}
+                    </p>
+                    
+                    {/* Apply Button */}
+                    <button onClick={() => handleApplyToJob(ad)} className="btn primary" style={{ width: '100%', padding: '15px', borderRadius: '10px', fontSize: '1.1rem', background: '#38bdf8', color: '#0f172a', fontWeight: 'bold', border: 'none' }}>
+                        1-Click Apply ➔
+                    </button>
+                    </div>
+                ))}
                 </div>
-              ))}
+            )}
           </div>
         )}
 
-        {/* TAB: PROFILE */}
+        {/* TAB: PROFILE WITH OTP VERIFICATION */}
         {activeTab === 'profile' && (
           <div style={{ maxWidth: '600px' }}>
              
-             {/* Read-Only Status */}
              <div style={{ background: '#1e293b', padding: '25px', borderRadius: '12px', border: '1px solid #334155', marginBottom: '30px' }}>
                  <p style={{ margin: '0 0 5px 0', color: '#94a3b8' }}>Username (Immutable)</p>
                  <h2 style={{ margin: 0, color: '#f8fafc' }}>{username}</h2>
              </div>
 
-             {/* Editable Form */}
              <div style={{ background: '#0f172a', padding: '30px', borderRadius: '12px', border: '1px solid #334155' }}>
                  <h3 style={{ margin: '0 0 20px 0', color: '#e2e8f0' }}>Contact Information</h3>
                  <form onSubmit={handleUpdateProfile} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                     
                      <div>
                          <label style={{ display: 'block', marginBottom: '8px', color: '#94a3b8' }}>Email Address</label>
-                         <input type="email" required className="input" value={profile.email} onChange={e => setProfile({...profile, email: e.target.value})} style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', padding: '12px', color: '#f8fafc' }} />
+                         <div style={{ display: 'flex', gap: '10px' }}>
+                             <input type="email" required className="input" value={profile.email} onChange={e => {
+                                 setProfile({...profile, email: e.target.value});
+                                 setShowOtpField(false);
+                                 setUpdateOtp("");
+                             }} style={{ flex: 1, background: '#1e293b', border: '1px solid #334155', padding: '12px', color: '#f8fafc' }} disabled={showOtpField} />
+                             
+                             {/* OTP Trigger Button */}
+                             {emailChanged && !showOtpField && (
+                                 <button type="button" onClick={handleRequestProfileOtp} disabled={sendingOtp} className="btn primary" style={{ background: '#38bdf8', color: '#0f172a', border: 'none', padding: '0 20px', fontWeight: 'bold' }}>
+                                     {sendingOtp ? "Sending..." : "Verify New Email"}
+                                 </button>
+                             )}
+                         </div>
                      </div>
+
+                     {/* OTP Input Field */}
+                     {showOtpField && (
+                         <div style={{ animation: 'fadeIn 0.5s' }}>
+                             <label style={{ display: 'block', marginBottom: '8px', color: '#22c55e' }}>Enter 6-Digit OTP sent to your new email</label>
+                             <input type="text" required className="input" placeholder="000000" value={updateOtp} onChange={e => setUpdateOtp(e.target.value.replace(/\D/g, ''))} maxLength={6} style={{ width: '100%', borderColor: '#22c55e', background: 'rgba(34, 197, 94, 0.05)', padding: '12px', color: '#f8fafc', letterSpacing: '2px' }} />
+                         </div>
+                     )}
+
                      <div>
                          <label style={{ display: 'block', marginBottom: '8px', color: '#94a3b8' }}>Phone Number</label>
                          <input type="tel" required className="input" value={profile.phone} onChange={e => setProfile({...profile, phone: e.target.value})} style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', padding: '12px', color: '#f8fafc' }} />
                      </div>
-                     <button type="submit" className="btn primary" disabled={saving} style={{ padding: '15px', background: '#38bdf8', color: '#0f172a', fontWeight: 'bold', border: 'none', borderRadius: '8px' }}>
-                         {saving ? "Saving..." : "Save Changes"}
+                     
+                     <button type="submit" className="btn primary" disabled={saving || (emailChanged && updateOtp.length !== 6)} style={{ padding: '15px', background: (emailChanged && updateOtp.length !== 6) ? '#334155' : '#38bdf8', color: (emailChanged && updateOtp.length !== 6) ? '#94a3b8' : '#0f172a', fontWeight: 'bold', border: 'none', borderRadius: '8px' }}>
+                         {saving ? "Saving..." : (emailChanged ? "Verify OTP & Save Changes" : "Save Changes")}
                      </button>
                  </form>
              </div>
 
-             {/* Connections List */}
              <div style={{ marginTop: '30px', marginBottom: '40px' }}>
                  <h3 style={{ color: '#94a3b8', textTransform: 'uppercase', fontSize: '13px', marginBottom: '15px' }}>Approved Company Links</h3>
-                 {linkedCompanies.length === 0 ? (
-                     <p style={{ color: '#64748b' }}>No connections yet.</p>
-                 ) : (
+                 {linkedCompanies.length === 0 ? <p style={{ color: '#64748b' }}>No connections yet.</p> : (
                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                        {linkedCompanies.map((comp, i) => (
-                            <div key={i} style={{ background: 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.3)', color: '#22c55e', padding: '8px 16px', borderRadius: '20px', fontSize: '14px' }}>
-                                ✅ {comp.company_name}
-                            </div>
-                        ))}
+                        {linkedCompanies.map((comp, i) => <div key={i} style={{ background: 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.3)', color: '#22c55e', padding: '8px 16px', borderRadius: '20px', fontSize: '14px' }}>✅ {comp.company_name}</div>)}
                      </div>
                  )}
              </div>
 
-             {/* DANGER ZONE */}
              <div style={{ background: 'rgba(239, 68, 68, 0.05)', padding: '30px', borderRadius: '12px', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
                 <h3 style={{ margin: '0 0 10px 0', color: '#ef4444' }}>Delete Account</h3>
                 <p style={{ margin: '0 0 20px 0', color: '#94a3b8', fontSize: '14px' }}>Permanently delete your profile and all associated data.</p>
-                <button onClick={handleDeleteAccount} className="btn" style={{ background: '#7f1d1d', color: '#fca5a5', border: '1px solid #ef4444', padding: '12px 25px', borderRadius: '8px', width: '100%' }}>
-                  🗑️ Delete Account
-                </button>
+                <button onClick={handleDeleteAccount} className="btn" style={{ background: '#7f1d1d', color: '#fca5a5', border: '1px solid #ef4444', padding: '12px 25px', borderRadius: '8px', width: '100%' }}>🗑️ Delete Account</button>
              </div>
 
           </div>

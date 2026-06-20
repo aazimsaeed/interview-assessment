@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import emailjs from '@emailjs/browser';
 
 export default function InterviewerDashboard({ username, recruiterKey, companyName: initialCompanyName, onBack, onViewReport }) {
   // Navigation State
-  const [activeTab, setActiveTab] = useState('interviews'); // 'interviews', 'ads', 'applications', 'sessions', 'profile'
+  const [activeTab, setActiveTab] = useState('interviews'); // 'interviews', 'candidates', 'ads', 'applications', 'sessions', 'profile'
   
   // Tab 1: Interview Management State
   const [candidates, setCandidates] = useState([]);
@@ -12,9 +13,13 @@ export default function InterviewerDashboard({ username, recruiterKey, companyNa
   const [loadingAI, setLoadingAI] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
 
+  // Candidates Rankings State
+  const [candidateStats, setCandidateStats] = useState({});
+
   // Tab 2: Job Ad State
   const [jobTitle, setJobTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [ads, setAds] = useState([]); 
 
   // Tab 3: Applications State
   const [applications, setApplications] = useState([]);
@@ -22,38 +27,99 @@ export default function InterviewerDashboard({ username, recruiterKey, companyNa
   // Tab 4: Active Sessions State
   const [interviews, setInterviews] = useState([]);
 
-  // Tab 5: Profile State
+  // Tab 5: Profile State & OTP Verification
   const [profile, setProfile] = useState({ email: '', company_name: initialCompanyName });
+  const [initialEmail, setInitialEmail] = useState(""); // Track original email
+  const [updateOtp, setUpdateOtp] = useState("");
+  const [showOtpField, setShowOtpField] = useState(false);
+  const [sendingOtp, setSendingOtp] = useState(false);
   const [saving, setSaving] = useState(false);
   
   const [loading, setLoading] = useState(true);
 
   const API_BASE = "http://localhost:8000";
 
+  // EMAILJS CONFIGURATION
+  const EMAILJS_SERVICE_ID = "service_rvp9rub"; 
+  const EMAILJS_TEMPLATE_ID = "template_d0bdb6h";
+  const EMAILJS_PUBLIC_KEY = "z_z2F1e4quN7sEzkd";
+
   // ==========================================
-  // DATA FETCHING
+  // DATA FETCHING & RANK COMPUTATION
   // ==========================================
   const fetchDashboardData = async () => {
     if (!recruiterKey) return;
     try {
-      // Fetch Approved Candidates
+      // 1. Fetch Approved Candidates
       const candRes = await fetch(`${API_BASE}/api/candidates?recruiter_key=${recruiterKey}`);
-      if (candRes.ok) setCandidates(await candRes.json());
+      let fetchedCandidates = [];
+      if (candRes.ok) fetchedCandidates = await candRes.json();
 
-      // Fetch Created Interviews
+      // 2. Fetch Created Interviews
       const intRes = await fetch(`${API_BASE}/api/recruiters/${recruiterKey}/all-interviews`);
-      if (intRes.ok) setInterviews(await intRes.json());
+      let fetchedInterviews = [];
+      if (intRes.ok) fetchedInterviews = await intRes.json();
+      setInterviews(fetchedInterviews);
 
-      // Fetch Pending Applications
+      // 3. Fetch My Job Advertisements
+      const adsRes = await fetch(`${API_BASE}/api/advertisements`);
+      if (adsRes.ok) {
+        const allAds = await adsRes.json();
+        setAds(allAds.filter(a => a.recruiter_key === recruiterKey));
+      }
+
+      // 4. Fetch Pending Applications
       const appRes = await fetch(`${API_BASE}/api/recruiters/${recruiterKey}/applications`);
       if (appRes.ok) setApplications(await appRes.json());
 
-      // Fetch Profile
+      // 5. Fetch Profile
       const profRes = await fetch(`${API_BASE}/api/recruiters/${username}/profile`);
       if (profRes.ok) {
           const profData = await profRes.json();
-          setProfile({ email: profData.email || '', company_name: profData.company_name || initialCompanyName });
+          // Only update initial email if we aren't currently in the middle of editing it
+          if (!showOtpField && updateOtp === "") {
+             setInitialEmail(profData.email || '');
+             setProfile({ email: profData.email || '', company_name: profData.company_name || initialCompanyName });
+          }
       }
+
+      // 6. Fetch Reports & Calculate Candidate Rankings
+      const reportPromises = fetchedInterviews
+          .filter(inv => inv.is_completed)
+          .map(inv => fetch(`${API_BASE}/api/reports/${inv.id}`).then(res => res.ok ? res.json() : null));
+      
+      const reports = await Promise.all(reportPromises);
+      const stats = {};
+      fetchedCandidates.forEach(c => {
+          stats[c.username] = { count: 0, totalScore: 0, completedCount: 0, rankScore: 0 };
+      });
+
+      fetchedInterviews.forEach(inv => {
+          if (stats[inv.candidate_name]) {
+              stats[inv.candidate_name].count += 1;
+              const report = reports.find(r => r && r.interview_id === inv.id);
+              if (report && report.metrics) {
+                  const verbalScore = report.metrics.confidenceScore || 0;
+                  const nonVerbalScore = report.metrics.eyeContactPercentage || 0;
+                  const overall = (verbalScore + nonVerbalScore) / 2;
+                  
+                  stats[inv.candidate_name].totalScore += overall;
+                  stats[inv.candidate_name].completedCount += 1;
+              }
+          }
+      });
+
+      Object.keys(stats).forEach(uname => {
+          if (stats[uname].completedCount > 0) {
+              stats[uname].rankScore = stats[uname].totalScore / stats[uname].completedCount;
+          }
+      });
+
+      setCandidateStats(stats);
+
+      // Sort candidates by ranking
+      fetchedCandidates.sort((a, b) => (stats[b.username]?.rankScore || 0) - (stats[a.username]?.rankScore || 0));
+      setCandidates(fetchedCandidates);
       
     } catch (err) { 
       console.error("Failed to sync dashboard", err); 
@@ -67,6 +133,30 @@ export default function InterviewerDashboard({ username, recruiterKey, companyNa
     const interval = setInterval(fetchDashboardData, 10000);
     return () => clearInterval(interval);
   }, [recruiterKey, username]);
+
+  // ==========================================
+  // CANDIDATE RANKING LOGIC
+  // ==========================================
+  const handleUnlinkCandidate = async (candidateUsername) => {
+    if (!window.confirm(`Are you sure you want to unlink ${candidateUsername}? They will be removed from your talent pool.`)) return;
+    setCandidates(prev => prev.filter(c => c.username !== candidateUsername));
+    try {
+        await fetch(`${API_BASE}/api/candidates/${candidateUsername}/unlink`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ recruiter_key: recruiterKey })
+        });
+        fetchDashboardData();
+    } catch (e) { console.error("Failed to unlink candidate", e); }
+  };
+
+  const getRankBadge = (score, completedCount) => {
+      if (completedCount === 0) return { label: 'Pending Tests', color: '#64748b' };
+      if (score >= 80) return { label: '🌟 Top Tier', color: '#22c55e' };
+      if (score >= 60) return { label: '👍 Strong', color: '#38bdf8' };
+      if (score >= 40) return { label: '⚠️ Average', color: '#eab308' };
+      return { label: '❌ Needs Review', color: '#f43f5e' };
+  };
 
   // ==========================================
   // INTERVIEW CREATION LOGIC
@@ -170,8 +260,17 @@ export default function InterviewerDashboard({ username, recruiterKey, companyNa
       if (res.ok) {
         alert("Advertisement posted to the global landing page!");
         setJobTitle(""); setDescription("");
+        fetchDashboardData();
       }
     } catch (err) { alert("Failed to post ad."); }
+  };
+
+  const handleDeleteAd = async (adId) => {
+    if (!window.confirm("Are you sure you want to permanently delete this job advertisement?")) return;
+    setAds(prev => prev.filter(a => a.id !== adId));
+    try {
+        await fetch(`${API_BASE}/api/advertisements/${adId}`, { method: 'DELETE' });
+    } catch (e) { console.error("Failed to delete ad", e); }
   };
 
   const handleApproveApplicant = async (appId, candName) => {
@@ -199,21 +298,17 @@ export default function InterviewerDashboard({ username, recruiterKey, companyNa
       fetchDashboardData();
     } catch (err) { console.error(err); }
   };
-  // ==========================================
-  // DELETE ACCOUNT LOGIC
-  // ==========================================
+
   const handleDeleteAccount = async () => {
     const confirmDelete = window.confirm(
       "WARNING: Are you sure you want to permanently delete your Recruiter account? This will instantly erase all your job ads, active sessions, and candidate links. This cannot be undone."
     );
-    
     if (!confirmDelete) return;
-
     try {
       const res = await fetch(`${API_BASE}/api/recruiters/${username}`, { method: 'DELETE' });
       if (res.ok) {
         alert("Your account has been permanently deleted.");
-        onBack(); // Routes the user back to the landing page
+        onBack(); 
       } else {
         const data = await res.json();
         alert(data.detail || "Failed to delete account.");
@@ -224,19 +319,66 @@ export default function InterviewerDashboard({ username, recruiterKey, companyNa
   };
 
   // ==========================================
-  // PROFILE LOGIC
+  // PROFILE LOGIC & OTP VERIFICATION
   // ==========================================
+  const emailChanged = profile.email !== initialEmail;
+
+  const handleRequestProfileOtp = async () => {
+      setSendingOtp(true);
+      try {
+          const response = await fetch(`${API_BASE}/api/profile/request-otp`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email: profile.email, role: "recruiter", username })
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.detail || "Failed to generate OTP.");
+
+          if (data.otp_for_testing) {
+              try {
+                  await emailjs.send(
+                      EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID,
+                      { to_email: profile.email, otp_code: data.otp_for_testing },
+                      EMAILJS_PUBLIC_KEY
+                  );
+                  alert("Verification code sent to your new email! Check your inbox.");
+              } catch (emailErr) {
+                  console.error("EmailJS Error:", emailErr);
+                  alert(`⚠️ EmailJS failed. For testing, your OTP is: ${data.otp_for_testing}`);
+              }
+          }
+          setShowOtpField(true);
+      } catch (err) { alert(err.message); } 
+      finally { setSendingOtp(false); }
+  };
+
   const handleUpdateProfile = async (e) => {
       e.preventDefault();
+      
+      if (emailChanged && !updateOtp) {
+          return alert("You must request and enter an OTP to verify your new email address.");
+      }
+
       setSaving(true);
       try {
           const res = await fetch(`${API_BASE}/api/recruiters/${username}/profile`, {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ email: profile.email, company_name: profile.company_name })
+              body: JSON.stringify({ 
+                  email: profile.email, 
+                  company_name: profile.company_name,
+                  otp: updateOtp
+              })
           });
-          if(res.ok) alert("Company Profile updated successfully!");
-          else alert("Failed to update profile.");
+          const data = await res.json();
+          if(res.ok) {
+              alert("Company Profile updated successfully!");
+              setInitialEmail(profile.email); // Reset baseline
+              setShowOtpField(false);
+              setUpdateOtp("");
+          } else {
+              alert(data.detail || "Failed to update profile.");
+          }
       } catch (err) { alert("Error saving profile."); }
       finally { setSaving(false); }
   };
@@ -258,8 +400,11 @@ export default function InterviewerDashboard({ username, recruiterKey, companyNa
             <button onClick={() => setActiveTab('interviews')} style={{ ...sidebarBtnStyle, background: activeTab === 'interviews' ? '#1e293b' : 'transparent', borderLeft: activeTab === 'interviews' ? '4px solid #8b5cf6' : '4px solid transparent' }}>
                 🎤 Assessment Creator
             </button>
+            <button onClick={() => setActiveTab('candidates')} style={{ ...sidebarBtnStyle, background: activeTab === 'candidates' ? '#1e293b' : 'transparent', borderLeft: activeTab === 'candidates' ? '4px solid #8b5cf6' : '4px solid transparent' }}>
+                🏆 Candidate Rankings
+            </button>
             <button onClick={() => setActiveTab('ads')} style={{ ...sidebarBtnStyle, background: activeTab === 'ads' ? '#1e293b' : 'transparent', borderLeft: activeTab === 'ads' ? '4px solid #8b5cf6' : '4px solid transparent' }}>
-                📢 Post Job Ads
+                📢 Job Advertisements
             </button>
             <button onClick={() => setActiveTab('applications')} style={{ ...sidebarBtnStyle, background: activeTab === 'applications' ? '#1e293b' : 'transparent', borderLeft: activeTab === 'applications' ? '4px solid #8b5cf6' : '4px solid transparent' }}>
                 👥 Pending Approvals
@@ -282,6 +427,7 @@ export default function InterviewerDashboard({ username, recruiterKey, companyNa
         <div style={{ marginBottom: '40px' }}>
           <h1 style={{ fontSize: '2.5rem', margin: '0 0 10px 0', color: '#f8fafc' }}>
             {activeTab === 'interviews' && "Assessment Creator"}
+            {activeTab === 'candidates' && "Candidate Rankings & Pool"}
             {activeTab === 'ads' && "Advertisement Manager"}
             {activeTab === 'applications' && "Applicant Tracking"}
             {activeTab === 'sessions' && "Active Sessions & Reports"}
@@ -289,10 +435,11 @@ export default function InterviewerDashboard({ username, recruiterKey, companyNa
           </h1>
           <p style={{ color: '#94a3b8', fontSize: '1.1rem', margin: 0 }}>
              {activeTab === 'interviews' && "Generate AI-driven interview scripts for approved candidates."}
-             {activeTab === 'ads' && "Publish job openings directly to the global platform."}
+             {activeTab === 'candidates' && "Evaluate your talent pool ranked by AI verbal and non-verbal analysis."}
+             {activeTab === 'ads' && "Publish job openings and manage your existing postings."}
              {activeTab === 'applications' && "Review and approve incoming candidate applications."}
              {activeTab === 'sessions' && "Monitor dispatched interviews and review completed performance reports."}
-             {activeTab === 'profile' && "Update your organizational details and contact methods."}
+             {activeTab === 'profile' && "Update your organizational details securely."}
           </p>
         </div>
 
@@ -305,7 +452,7 @@ export default function InterviewerDashboard({ username, recruiterKey, companyNa
                 <select className="input" value={selectedCandidate} onChange={handleCandidateSelect} required style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', padding: '15px' }}>
                   <option value="">-- Choose from approved candidates --</option>
                   {candidates.map(c => (
-                    <option key={c.username} value={c.username}>{c.username} - Applied for: {c.target_role}</option>
+                    <option key={c.username} value={c.username}>{c.username} - Applied for: {c.target_role || 'General'}</option>
                   ))}
                 </select>
                 {candidates.length === 0 && <p style={{ margin: '8px 0 0 0', color: '#fbbf24', fontSize: '13px' }}>No candidates linked yet. Approve applications first!</p>}
@@ -342,22 +489,82 @@ export default function InterviewerDashboard({ username, recruiterKey, companyNa
           </div>
         )}
 
+        {/* TAB: CANDIDATE RANKINGS */}
+        {activeTab === 'candidates' && (
+          <div>
+            {candidates.length === 0 ? (
+                <div style={emptyStateStyle}>No candidates linked to your account yet. Head to Pending Approvals.</div>
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                    {candidates.map((c, index) => {
+                        const stats = candidateStats[c.username] || { count: 0, rankScore: 0, completedCount: 0 };
+                        const badge = getRankBadge(stats.rankScore, stats.completedCount);
+                        
+                        return (
+                            <div key={c.username} style={{...cardStyle, borderLeft: `4px solid ${badge.color}`, padding: '20px 30px'}}>
+                                <div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <h3 style={{ margin: 0, fontSize: '1.4rem' }}>#{index + 1} {c.username}</h3>
+                                        <span style={{ background: `${badge.color}20`, color: badge.color, padding: '4px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: 'bold' }}>
+                                            {badge.label}
+                                        </span>
+                                    </div>
+                                    <div style={{ marginTop: '8px', color: '#94a3b8', fontSize: '14px' }}>
+                                        Target Role: <strong style={{ color: '#e2e8f0' }}>{c.target_role || 'General'}</strong> | 
+                                        Interviews Hosted: <strong style={{ color: '#e2e8f0' }}>{stats.count}</strong> | 
+                                        Overall AI Score: <strong style={{ color: badge.color }}>{stats.rankScore > 0 ? `${stats.rankScore.toFixed(1)}%` : 'N/A'}</strong>
+                                    </div>
+                                </div>
+                                <button onClick={() => handleUnlinkCandidate(c.username)} className="btn" style={{ background: '#451a1e', borderColor: '#7f1d1d', color: '#fca5a5' }}>
+                                    ✂️ Unlink Candidate
+                                </button>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+          </div>
+        )}
+
         {/* TAB: ADS */}
         {activeTab === 'ads' && (
-          <div className="card" style={{ padding: '40px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px' }}>
-            <form onSubmit={handleCreateAd} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <div>
-                <label style={{ display: 'block', marginBottom: '8px', color: '#94a3b8', fontWeight: 'bold' }}>Job Title</label>
-                <input type="text" required className="input" placeholder="e.g., Senior React Developer" value={jobTitle} onChange={e => setJobTitle(e.target.value)} style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', padding: '15px' }} />
-              </div>
-              <div>
-                <label style={{ display: 'block', marginBottom: '8px', color: '#94a3b8', fontWeight: 'bold' }}>Job Description</label>
-                <textarea required className="input" placeholder="Describe the role, responsibilities, and requirements..." value={description} onChange={e => setDescription(e.target.value)} style={{ minHeight: '150px', resize: 'vertical', width: '100%', background: '#1e293b', border: '1px solid #334155', padding: '15px' }} />
-              </div>
-              <button type="submit" className="btn primary" style={{ padding: '20px', background: '#38bdf8', color: '#0f172a', fontWeight: 'bold', border: 'none', borderRadius: '8px' }}>
-                📢 Publish to Global Job Board
-              </button>
-            </form>
+          <div>
+            <div className="card" style={{ padding: '40px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', marginBottom: '40px' }}>
+              <h3 style={{ marginTop: 0, color: '#f8fafc', marginBottom: '20px' }}>Create New Advertisement</h3>
+              <form onSubmit={handleCreateAd} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '8px', color: '#94a3b8', fontWeight: 'bold' }}>Job Title</label>
+                  <input type="text" required className="input" placeholder="e.g., Senior React Developer" value={jobTitle} onChange={e => setJobTitle(e.target.value)} style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', padding: '15px' }} />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '8px', color: '#94a3b8', fontWeight: 'bold' }}>Job Description</label>
+                  <textarea required className="input" placeholder="Describe the role, responsibilities, and requirements..." value={description} onChange={e => setDescription(e.target.value)} style={{ minHeight: '150px', resize: 'vertical', width: '100%', background: '#1e293b', border: '1px solid #334155', padding: '15px' }} />
+                </div>
+                <button type="submit" className="btn primary" style={{ padding: '20px', background: '#38bdf8', color: '#0f172a', fontWeight: 'bold', border: 'none', borderRadius: '8px' }}>
+                  📢 Publish to Global Job Board
+                </button>
+              </form>
+            </div>
+
+            <h3 style={{ color: '#f8fafc', marginBottom: '20px' }}>Your Active Advertisements</h3>
+            {ads.length === 0 ? (
+                <p style={{ color: '#64748b' }}>You currently have no active job postings.</p>
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                    {ads.map((ad) => (
+                        <div key={ad.id} style={{ ...cardStyle, padding: '20px' }}>
+                            <div style={{ flex: 1 }}>
+                                <h3 style={{ margin: '0 0 5px 0', color: '#38bdf8' }}>{ad.job_title}</h3>
+                                <p style={{ margin: 0, fontSize: '13px', color: '#94a3b8', marginBottom: '8px' }}>Posted: {new Date(ad.created_at).toLocaleDateString()}</p>
+                                <p style={{ margin: 0, fontSize: '14px', color: '#cbd5e1', maxWidth: '80%' }}>{ad.description}</p>
+                            </div>
+                            <button onClick={() => handleDeleteAd(ad.id)} className="btn" style={{ background: '#451a1e', borderColor: '#7f1d1d', color: '#fca5a5' }}>
+                                🗑️ Delete Ad
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
           </div>
         )}
 
@@ -406,7 +613,7 @@ export default function InterviewerDashboard({ username, recruiterKey, companyNa
                                 ) : (
                                     <span style={{ padding: '12px 25px', background: 'rgba(251, 191, 36, 0.1)', color: '#fbbf24', borderRadius: '8px', fontSize: '14px', border: '1px solid rgba(251, 191, 36, 0.3)' }}>⏳ Awaiting Candidate</span>
                                 )}
-                                <button className="btn" onClick={() => handleDeleteSession(inv.id)} style={{ background: 'transparent', border: '1px solid #451a1e', color: '#fca5a5', padding: '12px 20px' }}>Hide</button>
+                                <button className="btn" onClick={() => handleDeleteSession(inv.id)} style={{ background: '#451a1e', border: '1px solid #7f1d1d', color: '#fca5a5', padding: '12px 20px' }}>Hide / Delete</button>
                             </div>
                         </div>
                     ))}
@@ -415,7 +622,7 @@ export default function InterviewerDashboard({ username, recruiterKey, companyNa
           </div>
         )}
 
-        {/* TAB: PROFILE */}
+        {/* TAB: PROFILE WITH OTP VERIFICATION */}
         {activeTab === 'profile' && (
           <div style={{ maxWidth: '600px' }}>
              
@@ -436,10 +643,32 @@ export default function InterviewerDashboard({ username, recruiterKey, companyNa
                      </div>
                      <div>
                          <label style={{ display: 'block', marginBottom: '8px', color: '#94a3b8' }}>Work Email Address</label>
-                         <input type="email" required className="input" value={profile.email} onChange={e => setProfile({...profile, email: e.target.value})} style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', padding: '15px', color: '#f8fafc' }} />
+                         <div style={{ display: 'flex', gap: '10px' }}>
+                             <input type="email" required className="input" value={profile.email} onChange={e => {
+                                 setProfile({...profile, email: e.target.value});
+                                 setShowOtpField(false);
+                                 setUpdateOtp("");
+                             }} style={{ flex: 1, background: '#1e293b', border: '1px solid #334155', padding: '15px', color: '#f8fafc' }} disabled={showOtpField} />
+                             
+                             {/* OTP Trigger Button */}
+                             {emailChanged && !showOtpField && (
+                                 <button type="button" onClick={handleRequestProfileOtp} disabled={sendingOtp} className="btn primary" style={{ background: '#8b5cf6', borderColor: '#7c3aed', padding: '0 20px' }}>
+                                     {sendingOtp ? "Sending..." : "Verify New Email"}
+                                 </button>
+                             )}
+                         </div>
                      </div>
-                     <button type="submit" className="btn primary" disabled={saving} style={{ padding: '20px', background: '#8b5cf6', color: '#fff', fontWeight: 'bold', border: 'none', borderRadius: '8px' }}>
-                         {saving ? "Saving..." : "Save Company Changes"}
+
+                     {/* OTP Input Field */}
+                     {showOtpField && (
+                         <div style={{ animation: 'fadeIn 0.5s' }}>
+                             <label style={{ display: 'block', marginBottom: '8px', color: '#22c55e' }}>Enter 6-Digit OTP sent to your new email</label>
+                             <input type="text" required className="input" placeholder="000000" value={updateOtp} onChange={e => setUpdateOtp(e.target.value.replace(/\D/g, ''))} maxLength={6} style={{ width: '100%', borderColor: '#22c55e', background: 'rgba(34, 197, 94, 0.05)', padding: '15px', color: '#f8fafc', letterSpacing: '2px' }} />
+                         </div>
+                     )}
+
+                     <button type="submit" className="btn primary" disabled={saving || (emailChanged && updateOtp.length !== 6)} style={{ padding: '20px', background: (emailChanged && updateOtp.length !== 6) ? '#334155' : '#8b5cf6', color: '#fff', fontWeight: 'bold', border: 'none', borderRadius: '8px' }}>
+                         {saving ? "Saving..." : (emailChanged ? "Verify OTP & Save Changes" : "Save Company Changes")}
                      </button>
                  </form>
              </div>

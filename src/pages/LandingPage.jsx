@@ -3,11 +3,18 @@ import React, { useState, useEffect } from 'react';
 export default function LandingPage({ onStartCandidate, onStartRecruiter, onStartAdmin }) {
   const [ads, setAds] = useState([]);
 
+  // UPDATE: Added a polling mechanism so deleted ads vanish in real-time
   useEffect(() => {
-    fetch("http://localhost:8000/api/advertisements")
-      .then(res => res.json())
-      .then(data => setAds(data))
-      .catch(err => console.error("Failed to load ads", err));
+    const fetchAds = () => {
+      fetch("http://localhost:8000/api/advertisements")
+        .then(res => res.json())
+        .then(data => setAds(data))
+        .catch(err => console.error("Failed to load ads", err));
+    };
+
+    fetchAds(); // Initial fetch
+    const interval = setInterval(fetchAds, 10000); // Poll every 10 seconds
+    return () => clearInterval(interval);
   }, []);
 
   const handleApplyClick = (ad) => {
@@ -49,7 +56,7 @@ export default function LandingPage({ onStartCandidate, onStartRecruiter, onStar
           </button>
         </div>
 
-        <div onClick={onStartAdmin} style={{ marginTop: '50px', fontSize: '13px', color: '#475569', cursor: 'pointer', opacity: 0.8 }}>
+        <div onClick={onStartAdmin} style={{ marginTop: '50px',padding: '10px 24px', fontSize: '0.9rem', fontSize: '13px', color: '#000000',borderRadius: '8px', cursor: 'pointer', background: 'linear-gradient(135deg, #38bdf8, #2563eb)', border: 'none', boxShadow: '0 10px 25px rgba(37, 99, 235, 0.4)' }}>
            🛡️ Admin Access
         </div>
       </div>

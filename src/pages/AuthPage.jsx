@@ -13,6 +13,10 @@ export default function AuthPage({ type, onLogin, onBack }) {
     const [phone, setPhone] = useState("");
     const [companyName, setCompanyName] = useState("");
     
+    // --- NEW: Registration OTP State ---
+    const [registerOtp, setRegisterOtp] = useState("");
+    const [showRegisterOtpField, setShowRegisterOtpField] = useState(false);
+    
     // --- UI State ---
     const [showPassword, setShowPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -31,7 +35,6 @@ export default function AuthPage({ type, onLogin, onBack }) {
     const API_BASE = "http://localhost:8000"; 
 
     // --- EMAILJS CONFIGURATION ---
-    // (Ensure you put your actual keys here)
     const EMAILJS_SERVICE_ID = "service_rvp9rub"; 
     const EMAILJS_TEMPLATE_ID = "template_d0bdb6h";
     const EMAILJS_PUBLIC_KEY = "z_z2F1e4quN7sEzkd";
@@ -77,7 +80,6 @@ export default function AuthPage({ type, onLogin, onBack }) {
                     otp_code: data.generated_otp 
                 };
                 
-                // --- NEW SAFETY NET FOR EMAILJS ---
                 try {
                     await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, templateParams, EMAILJS_PUBLIC_KEY);
                     alert("OTP dispatch secure execution completed. Check your email inbox.");
@@ -87,7 +89,6 @@ export default function AuthPage({ type, onLogin, onBack }) {
                 }
             }
             
-            // This will now ALWAYS trigger, moving you to step 3!
             setOtpStep(3); 
         } catch (err) { setError(err.message); } 
         finally { setLoading(false); }
@@ -165,6 +166,40 @@ export default function AuthPage({ type, onLogin, onBack }) {
     };
 
     // ==========================================
+    // NEW: REGISTRATION OTP REQUEST
+    // ==========================================
+    const handleRequestRegisterOtp = async () => {
+        if (!email) return setError("Please enter your email address first to receive the code.");
+        setLoading(true);
+        setError("");
+        try {
+            const response = await fetch(`${API_BASE}/api/register/request-otp`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email: email, role: type })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || "Failed to generate OTP.");
+
+            if (data.otp_for_testing) {
+                try {
+                    await emailjs.send(
+                        EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID,
+                        { to_email: email, otp_code: data.otp_for_testing },
+                        EMAILJS_PUBLIC_KEY
+                    );
+                    alert("Verification code sent! Check your email inbox.");
+                } catch (emailErr) {
+                    console.error("EmailJS Error:", emailErr);
+                    alert(`⚠️ EmailJS failed. For testing, your OTP is: ${data.otp_for_testing}`);
+                }
+            }
+            setShowRegisterOtpField(true);
+        } catch (err) { setError(err.message); } 
+        finally { setLoading(false); }
+    };
+
+    // ==========================================
     // LOGIN & REGISTER LOGIC
     // ==========================================
     const handleAuthSubmit = async (e) => {
@@ -175,6 +210,11 @@ export default function AuthPage({ type, onLogin, onBack }) {
             return setError("Passwords do not match!");
         }
 
+        // --- ENFORCE REGISTRATION OTP ---
+        if (isRegistering && !registerOtp) {
+            return setError("Please verify your email with the OTP before registering.");
+        }
+
         setLoading(true);
         const endpoint = isRegistering ? `${API_BASE}/api/${type}s/register` : `${API_BASE}/api/${type}s/login`;
 
@@ -182,6 +222,8 @@ export default function AuthPage({ type, onLogin, onBack }) {
         
         if (isRegistering) {
             payload.email = email;
+            payload.otp = registerOtp; // Inject the verified OTP
+            
             if (type === "candidate") {
                 payload.phone = phone;
             } else if (type === "recruiter") {
@@ -225,6 +267,8 @@ export default function AuthPage({ type, onLogin, onBack }) {
             if (isRegistering) {
                 alert("Registration successful! Please log in.");
                 setIsRegistering(false);
+                setShowRegisterOtpField(false);
+                setRegisterOtp("");
                 setPassword("");
                 setConfirmPassword("");
             } else {
@@ -349,8 +393,21 @@ export default function AuthPage({ type, onLogin, onBack }) {
                             </div>
                             <div>
                                 <label style={{ display: 'block', marginBottom: '5px' }}>Email Address</label>
-                                <input type="email" required className="input" placeholder="work@company.com" value={email} onChange={e => setEmail(e.target.value)} />
+                                <div style={{ display: 'flex', gap: '10px' }}>
+                                    <input type="email" required className="input" placeholder="work@company.com" value={email} onChange={e => setEmail(e.target.value)} style={{ flex: 1 }} disabled={showRegisterOtpField} />
+                                    {!showRegisterOtpField && (
+                                        <button type="button" className="btn" onClick={handleRequestRegisterOtp} disabled={loading} style={{ background: '#38bdf8', color: '#0f172a', border: 'none', fontWeight: 'bold' }}>
+                                            Send Code
+                                        </button>
+                                    )}
+                                </div>
                             </div>
+                            {showRegisterOtpField && (
+                                <div style={{ animation: 'fadeIn 0.5s' }}>
+                                    <label style={{ display: 'block', marginBottom: '5px', color: '#22c55e' }}>Verification Code (OTP)</label>
+                                    <input type="text" required className="input" placeholder="6-digit code" value={registerOtp} onChange={e => setRegisterOtp(e.target.value.replace(/\D/g, ''))} maxLength={6} style={{ borderColor: '#22c55e', background: 'rgba(34, 197, 94, 0.05)', letterSpacing: '2px' }} />
+                                </div>
+                            )}
                         </>
                     )}
 
@@ -358,8 +415,21 @@ export default function AuthPage({ type, onLogin, onBack }) {
                         <>
                             <div>
                                 <label style={{ display: 'block', marginBottom: '5px' }}>Email Address</label>
-                                <input type="email" required className="input" value={email} onChange={e => setEmail(e.target.value)} />
+                                <div style={{ display: 'flex', gap: '10px' }}>
+                                    <input type="email" required className="input" value={email} onChange={e => setEmail(e.target.value)} style={{ flex: 1 }} disabled={showRegisterOtpField} />
+                                    {!showRegisterOtpField && (
+                                        <button type="button" className="btn" onClick={handleRequestRegisterOtp} disabled={loading} style={{ background: '#38bdf8', color: '#0f172a', border: 'none', fontWeight: 'bold' }}>
+                                            Send Code
+                                        </button>
+                                    )}
+                                </div>
                             </div>
+                            {showRegisterOtpField && (
+                                <div style={{ animation: 'fadeIn 0.5s' }}>
+                                    <label style={{ display: 'block', marginBottom: '5px', color: '#22c55e' }}>Verification Code (OTP)</label>
+                                    <input type="text" required className="input" placeholder="6-digit code" value={registerOtp} onChange={e => setRegisterOtp(e.target.value.replace(/\D/g, ''))} maxLength={6} style={{ borderColor: '#22c55e', background: 'rgba(34, 197, 94, 0.05)', letterSpacing: '2px' }} />
+                                </div>
+                            )}
                             <div>
                                 <label style={{ display: 'block', marginBottom: '5px' }}>Phone Number</label>
                                 <input type="tel" required className="input" value={phone} onChange={e => setPhone(e.target.value)} />
@@ -397,7 +467,12 @@ export default function AuthPage({ type, onLogin, onBack }) {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px' }}>
                     <p style={{ margin: 0, fontSize: '14px' }}>
                         {isRegistering ? "Already have an account?" : "Don't have an account?"}{" "}
-                        <span onClick={() => { setIsRegistering(!isRegistering); setError(""); }} style={{ color: '#38bdf8', cursor: 'pointer', textDecoration: 'underline' }}>
+                        <span onClick={() => { 
+                            setIsRegistering(!isRegistering); 
+                            setError(""); 
+                            setShowRegisterOtpField(false);
+                            setRegisterOtp("");
+                        }} style={{ color: '#38bdf8', cursor: 'pointer', textDecoration: 'underline' }}>
                             {isRegistering ? "Log in here" : "Register here"}
                         </span>
                     </p>

@@ -78,11 +78,17 @@ class UserAuth(BaseModel):
     username: str
     password: str
 
+class UpdateOTPRequest(BaseModel):
+    email: str
+    role: str
+    username: str
+
 class RecruiterRegister(BaseModel):
     username: str
     password: str
     email: str
     company_name: str
+    otp: str
 
 class RecruiterProfileUpdate(BaseModel):
     email: str
@@ -91,6 +97,10 @@ class RecruiterProfileUpdate(BaseModel):
 class ForgotPasswordRequest(BaseModel):
     role: str
     email: str
+
+class RegisterOTPRequest(BaseModel):
+    email: str
+    role: str
 
 class PasswordReset(BaseModel):
     role: str
@@ -104,13 +114,16 @@ class AdminAuth(BaseModel):
 
 class ProfileUpdate(BaseModel):
     email: str
-    phone: str
+    phone: Optional[str] = None
+    company_name: Optional[str] = None
+    otp: Optional[str] = None
 
 class CandidateRegister(BaseModel):
     username: str
     password: str
     email: str
     phone: str  
+    otp: str
 
 class RoleUpdate(BaseModel):
     username: str
@@ -166,6 +179,7 @@ def hash_password(password: str):
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
 admin_otp_store = {}
 reset_otp_store = {}
+register_otp_store = {}
 
 @app.post("/api/admins/verify-email")
 async def verify_admin_email(payload: AdminAuth):
@@ -259,14 +273,15 @@ async def get_all_global_interviews():
 # --- RECRUITER & CANDIDATE AUTH ENDPOINTS ---
 @app.post("/api/recruiters/register")
 async def register_recruiter(user: RecruiterRegister):
+    # 1. VERIFY OTP FIRST
+    key = f"recruiter_{user.email.lower()}"
+    if key not in register_otp_store or register_otp_store[key] != user.otp:
+        raise HTTPException(status_code=400, detail="Invalid or expired Verification Code")
+        
     existing_user = await recruiters_collection.find_one({"username": user.username})
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already exists")
     
-    existing_email = await recruiters_collection.find_one({"email": user.email.lower()})
-    if existing_email:
-        raise HTTPException(status_code=400, detail="Email already registered")
-
     recruiter_key = str(uuid.uuid4())[:6].upper()
     await recruiters_collection.insert_one({
         "username": user.username, 
@@ -275,7 +290,31 @@ async def register_recruiter(user: RecruiterRegister):
         "company_name": user.company_name,
         "recruiter_key": recruiter_key
     })
+    
+    del register_otp_store[key] # Cleanup OTP
     return {"message": "Recruiter registered successfully"}
+
+@app.post("/api/register/request-otp")
+async def request_registration_otp(payload: RegisterOTPRequest):
+    email = payload.email.lower()
+    
+    # Check if email is already in use
+    if payload.role == "recruiter":
+        existing = await recruiters_collection.find_one({"email": email})
+    else:
+        existing = await candidates_collection.find_one({"email": email})
+        
+    if existing:
+        raise HTTPException(status_code=400, detail="This email is already registered.")
+        
+    otp = str(random.randint(100000, 999999))
+    register_otp_store[f"{payload.role}_{email}"] = otp
+    
+    # In a production app, you would use an SMTP library here to email the OTP.
+    # For now, we will print it to the terminal for you to test!
+    print(f"\n📧 EMAIL SENT TO: {email} | VERIFICATION CODE: {otp}\n")
+    
+    return {"message": "Verification code sent to email", "otp_for_testing": otp}
 
 @app.post("/api/recruiters/login")
 async def login_recruiter(user: UserAuth):
@@ -326,33 +365,53 @@ async def delete_recruiter_account(username: str):
     await recruiters_collection.delete_one({"username": username})
     return {"message": "Recruiter account and all associated data deleted successfully"}
 
-@app.get("/api/recruiters/{username}/profile")
-async def get_recruiter_profile(username: str):
-    user = await recruiters_collection.find_one({"username": username}, {"_id": 0, "password_hash": 0})
-    if not user:
-        raise HTTPException(status_code=404, detail="Recruiter not found")
-    return user
+@app.post("/api/profile/request-otp")
+async def request_profile_update_otp(payload: UpdateOTPRequest):
+    email = payload.email.lower()
+    
+    # Check if the new email belongs to someone else
+    if payload.role == "recruiter":
+        existing = await recruiters_collection.find_one({"email": email})
+    else:
+        existing = await candidates_collection.find_one({"email": email})
+        
+    if existing and existing.get("username") != payload.username:
+        raise HTTPException(status_code=400, detail="This email is already in use by another account.")
+        
+    otp = str(random.randint(100000, 999999))
+    register_otp_store[f"update_{payload.role}_{email}"] = otp
+    print(f"\n📧 PROFILE UPDATE EMAIL SENT TO: {email} | VERIFICATION CODE: {otp}\n")
+    
+    return {"message": "Verification code sent", "otp_for_testing": otp}
 
 @app.put("/api/recruiters/{username}/profile")
-async def update_recruiter_profile(username: str, payload: RecruiterProfileUpdate):
-    result = await recruiters_collection.update_one(
+async def update_recruiter_profile(username: str, data: ProfileUpdate):
+    user = await recruiters_collection.find_one({"username": username})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    new_email = data.email.lower()
+    if user.get("email") != new_email:
+        # Email has changed, strict OTP verification required
+        key = f"update_recruiter_{new_email}"
+        if key not in register_otp_store or register_otp_store[key] != data.otp:
+            raise HTTPException(status_code=400, detail="Invalid or expired Verification Code for the new email.")
+        del register_otp_store[key] # cleanup
+        
+    await recruiters_collection.update_one(
         {"username": username},
-        {"$set": {"email": payload.email.lower(), "company_name": payload.company_name}}
+        {"$set": {"email": new_email, "company_name": data.company_name}}
     )
-    
-    # We must also update any existing advertisements with the new company name
-    await advertisements_collection.update_many(
-        {"recruiter_key": username["recruiter_key"]},
-        {"$set": {"company_name": payload.company_name}}
-    )
-    
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Recruiter not found")
-    return {"message": "Profile updated successfully"}
+    return {"message": "Company Profile updated successfully"}
 
 
 @app.post("/api/candidates/register")
 async def register_candidate(user: CandidateRegister):
+    # 1. VERIFY OTP FIRST
+    key = f"candidate_{user.email.lower()}"
+    if key not in register_otp_store or register_otp_store[key] != user.otp:
+        raise HTTPException(status_code=400, detail="Invalid or expired Verification Code")
+        
     existing_user = await candidates_collection.find_one({"username": user.username})
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already exists")
@@ -362,8 +421,10 @@ async def register_candidate(user: CandidateRegister):
         "password_hash": hash_password(user.password),
         "email": user.email.lower(),
         "phone": user.phone,
-        "linked_recruiters": [] # Start with empty approvals
+        "linked_recruiters": []
     })
+    
+    del register_otp_store[key] # Cleanup OTP
     return {"message": "Candidate registered successfully"}
 
 @app.post("/api/candidates/login")
@@ -527,22 +588,25 @@ async def link_candidate_to_recruiter(payload: LinkPayload):
     )
     return {"recruiter_name": recruiter["username"]}
 
-@app.get("/api/candidates/{username}/profile")
-async def get_candidate_profile(username: str):
-    user = await candidates_collection.find_one({"username": username}, {"_id": 0, "password_hash": 0})
-    if not user:
-        raise HTTPException(status_code=404, detail="Candidate not found")
-    return user
-
 @app.put("/api/candidates/{username}/profile")
-async def update_candidate_profile(username: str, payload: ProfileUpdate):
-    result = await candidates_collection.update_one(
+async def update_candidate_profile(username: str, data: ProfileUpdate):
+    user = await candidates_collection.find_one({"username": username})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    new_email = data.email.lower()
+    if user.get("email") != new_email:
+        # Email has changed, strict OTP verification required
+        key = f"update_candidate_{new_email}"
+        if key not in register_otp_store or register_otp_store[key] != data.otp:
+            raise HTTPException(status_code=400, detail="Invalid or expired Verification Code for the new email.")
+        del register_otp_store[key] # cleanup
+        
+    await candidates_collection.update_one(
         {"username": username},
-        {"$set": {"email": payload.email.lower(), "phone": payload.phone}}
+        {"$set": {"email": new_email, "phone": data.phone}}
     )
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Candidate not found")
-    return {"message": "Profile updated successfully"}
+    return {"message": "Candidate Profile updated successfully"}
 
 @app.get("/api/candidates")
 async def get_all_candidates(recruiter_key: str = None):
@@ -641,6 +705,34 @@ async def delete_candidate_account(username: str):
     await candidates_collection.delete_one({"username": username})
     return {"message": "Candidate account and all associated data deleted successfully"}
 
+# ==========================================
+# NEW ENDPOINTS FOR DELETING ADS & UNLINKING
+# ==========================================
+
+@app.delete("/api/advertisements/{ad_id}")
+async def delete_advertisement(ad_id: str):
+    # 1. Delete the actual advertisement
+    delete_result = await advertisements_collection.delete_one({"id": ad_id})
+    if delete_result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Advertisement not found")
+        
+    # 2. Cascade Delete: Remove any pending applications tied to this deleted job
+    await applications_collection.delete_many({"ad_id": ad_id})
+    
+    return {"message": "Advertisement and associated applications deleted successfully"}
+
+@app.post("/api/candidates/{username}/unlink")
+async def unlink_candidate(username: str, payload: dict):
+    recruiter_key = payload.get("recruiter_key")
+    if not recruiter_key:
+        raise HTTPException(status_code=400, detail="Missing recruiter_key")
+        
+    # Pull (remove) this recruiter from the candidate's linked array
+    await candidates_collection.update_one(
+        {"username": username},
+        {"$pull": {"linked_recruiters": {"recruiter_key": recruiter_key}}}
+    )
+    return {"message": "Candidate successfully unlinked"}
 # ==========================================
 # GEMINI GENERATION & EVALUATION
 # ==========================================
