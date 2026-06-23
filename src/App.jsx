@@ -30,7 +30,7 @@ export default function App() {
   const [interviewFormat, setInterviewFormat] = useState(null); 
 
   // ==========================================
-  // ROUTING & BROWSER HISTORY FIX
+  // ROUTING LOGIC
   // ==========================================
   useEffect(() => {
     const handleHashChange = () => {
@@ -44,7 +44,6 @@ export default function App() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  // Using `replaceHistory` parameter prevents the back button from returning to the previous state
   const navigate = (page, replaceHistory = false) => {
     if (replaceHistory) {
       window.location.replace(`#${page}`);
@@ -53,37 +52,41 @@ export default function App() {
     }
   };
 
-  // ==========================================
-  // ROUTE GUARDS: Prevent "Back Button" exploits
-  // ==========================================
   useEffect(() => {
     const isRecruiterRoute = ["recruiter-options", "interviewer-dashboard"].includes(currentPage);
     const isCandidateRoute = ["setup", "interview"].includes(currentPage);
     const isAdminRoute = ["admin-dashboard"].includes(currentPage);
     const isSharedRoute = ["dashboard"].includes(currentPage);
 
-    // If unauthenticated or accessing the wrong role's page, forcefully replace history and boot to landing
     if ((isRecruiterRoute && authRole !== "recruiter") || 
         (isCandidateRoute && authRole !== "candidate") ||
+        (isAdminRoute && authRole !== "admin") ||
         (isSharedRoute && !authRole)) {
         navigate("landing", true); 
     }
   }, [currentPage, authRole]);
 
-  // --- ROUTING LOGIC ---
-  const handleLogin = (data) => {
-    // Extract username whether it's an old string format or the new object format
-    const loggedInUsername = typeof data === 'string' ? data : data.username;
+  // --- HARDENED LOGIN ROUTER ---
+  const handleLogin = (usernameData, roleOverride, rKeyParam, cNameParam) => {
+    const loggedInUsername = typeof usernameData === 'string' ? usernameData : usernameData?.username;
     
-    localStorage.setItem("authRole", authRole); 
+    // Explicitly enforce the role passed from AuthPage to prevent state caching errors
+    const finalRole = roleOverride || authRole;
+    
+    setAuthRole(finalRole);
+    localStorage.setItem("authRole", finalRole); 
 
-    if (authRole === "recruiter") {
+    if (finalRole === "admin") {
+      setAdminUsername(loggedInUsername);
+      localStorage.setItem("adminUsername", loggedInUsername);
+      navigate("admin-dashboard");
+      
+    } else if (finalRole === "recruiter") {
       setRecruiterUsername(loggedInUsername);
       localStorage.setItem("recruiterUsername", loggedInUsername);
       
-      // Save the Company Name and Recruiter Key to memory
-      const rKey = data.recruiter_key || "";
-      const cName = data.company_name || "Unknown Company";
+      const rKey = rKeyParam || (typeof usernameData === 'object' ? usernameData.recruiter_key : "");
+      const cName = cNameParam || (typeof usernameData === 'object' ? usernameData.company_name : "Unknown Company");
       
       setRecruiterKey(rKey);
       setCompanyName(cName);
@@ -91,10 +94,7 @@ export default function App() {
       localStorage.setItem("companyName", cName);
       
       navigate("interviewer-dashboard"); 
-    } else if (authRole === "admin") {
-      setAdminUsername(loggedInUsername);
-      localStorage.setItem("adminUsername", loggedInUsername);
-      navigate("admin-dashboard");
+      
     } else {
       setCandidateUsername(loggedInUsername);
       localStorage.setItem("candidateUsername", loggedInUsername);
@@ -103,21 +103,13 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    // 1. Clear States
     setRecruiterUsername("");
     setCandidateUsername("");
     setAdminUsername("");
     setAuthRole(null);
     setInterviewFormat(null);
     
-    // 2. Clear Local Storage
-    localStorage.removeItem("recruiterUsername");
-    localStorage.removeItem("candidateUsername");
-    localStorage.removeItem("adminUsername");
-    localStorage.removeItem("authRole");
-    localStorage.removeItem("username"); 
-    
-    // 3. FORCE REPLACE ROUTE: They are logged out completely and cannot go backward
+    localStorage.clear(); // Complete security clear
     navigate("landing", true);
   };
 
@@ -128,29 +120,19 @@ export default function App() {
       {currentPage === "landing" && (
         <LandingPage 
           onStartCandidate={() => { 
-            setAuthRole("candidate"); 
-            localStorage.setItem("authRole", "candidate"); 
-            navigate("auth"); 
+            setAuthRole("candidate"); localStorage.setItem("authRole", "candidate"); navigate("auth"); 
           }}
           onStartRecruiter={() => { 
-            setAuthRole("recruiter"); 
-            localStorage.setItem("authRole", "recruiter"); 
-            navigate("auth"); 
+            setAuthRole("recruiter"); localStorage.setItem("authRole", "recruiter"); navigate("auth"); 
           }}
           onStartAdmin={() => { 
-            setAuthRole("admin"); 
-            localStorage.setItem("authRole", "admin"); // <-- This ensures it doesn't refresh to Candidate!
-            navigate("auth"); 
+            setAuthRole("admin"); localStorage.setItem("authRole", "admin"); navigate("auth"); 
           }} 
         />
       )}
 
       {currentPage === "auth" && (
-        <AuthPage 
-          type={authRole} 
-          onLogin={handleLogin} 
-          onBack={handleLogout} 
-        />
+        <AuthPage type={authRole} onLogin={handleLogin} onBack={handleLogout} />
       )}
 
       {/* 2. SECURE ADMIN FLOW */}
@@ -158,106 +140,64 @@ export default function App() {
         <AdminDashboard 
           username={adminUsername} 
           onBack={handleLogout}
-          onViewReport={(fetchedReport) => {
-            setReportData(fetchedReport);
-            navigate("dashboard");
-          }} 
+          onViewReport={(fetchedReport) => { setReportData(fetchedReport); navigate("dashboard"); }} 
         />
       )}
 
-      {/* 2. SECURE RECRUITER FLOW */}
+      {/* 3. SECURE RECRUITER FLOW */}
       {authRole === "recruiter" && currentPage === "recruiter-options" && (
         <RecruiterOptionsPage 
-          onSelectOption={(format) => {
-            setInterviewFormat(format); 
-            navigate("interviewer-dashboard"); 
-          }}
+          onSelectOption={(format) => { setInterviewFormat(format); navigate("interviewer-dashboard"); }}
           onBack={handleLogout}
         />
       )}
 
       {authRole === "recruiter" && currentPage === "interviewer-dashboard" && (
         <InterviewerDashboard 
-          username={recruiterUsername} 
-          recruiterKey={recruiterKey} 
-          companyName={companyName} 
-          onBack={handleLogout}
-          onViewReport={(fetchedReport) => {
-            setReportData(fetchedReport);
-            navigate("dashboard");
-          }} 
+          username={recruiterUsername} recruiterKey={recruiterKey} companyName={companyName} 
+          onBack={handleLogout} onViewReport={(fetchedReport) => { setReportData(fetchedReport); navigate("dashboard"); }} 
         />
       )}
 
-      {/* 3. SECURE CANDIDATE FLOW */}
+      {/* 4. SECURE CANDIDATE FLOW */}
       {authRole === "candidate" && currentPage === "setup" && (
         <SetupPage 
-          username={candidateUsername}
-          onViewReport={(fetchedReport) => {
-            setReportData(fetchedReport);
-            navigate("dashboard");
-          }}
-          onStart={(data) => {
-            setInterviewData(data);
-            navigate("interview");
-          }}
-          onBack={handleLogout}
+          username={candidateUsername} onViewReport={(fetchedReport) => { setReportData(fetchedReport); navigate("dashboard"); }}
+          onStart={(data) => { setInterviewData(data); navigate("interview"); }} onBack={handleLogout}
         />
       )}
 
       {authRole === "candidate" && currentPage === "interview" && (
         <div style={{ padding: '16px' }}>
             <InterviewMonitor 
-              studentName={interviewData?.studentName}
-              customQuestions={interviewData?.questions}
+              studentName={interviewData?.studentName} customQuestions={interviewData?.questions}
               onFinish={async (report) => {
                   if (interviewData?.id && report) {
                       try {
                           await fetch('http://localhost:8000/api/reports', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
+                              method: 'POST', headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({
-                                  interview_id: interviewData.id,
-                                  candidate_name: interviewData.studentName,
-                                  duration: report.duration,
-                                  metrics: report.metrics,
-                                  report: {
-                                      strengths: report.report?.strengths || [],
-                                      weaknesses: report.report?.weaknesses || [],
-                                      suggestions: report.report?.suggestions || [],
-                                      timeline: report.timeline || [],
-                                      snapshots: report.snapshots || [] 
-                                  }
+                                  interview_id: interviewData.id, candidate_name: interviewData.studentName,
+                                  duration: report.duration, metrics: report.metrics,
+                                  report: { strengths: report.report?.strengths || [], weaknesses: report.report?.weaknesses || [], suggestions: report.report?.suggestions || [], timeline: report.timeline || [], snapshots: report.snapshots || [] }
                               })
                           });
-                      } catch (err) {
-                          console.error("Failed to save report to DB", err);
-                      }
+                      } catch (err) { console.error("Failed to save report to DB", err); }
                   }
-                  
-                  setReportData(report);
-                  navigate("dashboard");
+                  setReportData(report); navigate("dashboard");
               }}
               onExit={() => navigate("setup")}
             />
         </div>
       )}
 
-      {/* 4. SECURE SHARED DASHBOARD */}
+      {/* 5. SECURE SHARED DASHBOARD */}
       {authRole && currentPage === "dashboard" && (
         <DashboardPage 
           studentName={interviewData?.studentName || reportData?.candidate_name}
           loggedInUser={authRole === "recruiter" ? recruiterUsername : (authRole === "admin" ? adminUsername : candidateUsername)}
           report={reportData}
-          onExit={() => {
-            if (authRole === "recruiter") {
-              navigate("interviewer-dashboard");
-            } else if (authRole === "admin") {
-              navigate("admin-dashboard"); // Return admin to admin dashboard
-            } else {
-              navigate("setup");
-            }
-          }}
+          onExit={() => navigate(authRole === "recruiter" ? "interviewer-dashboard" : (authRole === "admin" ? "admin-dashboard" : "setup"))}
         />
       )}
     </div>

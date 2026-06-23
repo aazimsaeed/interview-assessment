@@ -3,7 +3,6 @@ import React, { useState, useEffect } from 'react';
 export default function LandingPage({ onStartCandidate, onStartRecruiter, onStartAdmin }) {
   const [ads, setAds] = useState([]);
 
-  // UPDATE: Added a polling mechanism so deleted ads vanish in real-time
   useEffect(() => {
     const fetchAds = () => {
       fetch("http://localhost:8000/api/advertisements")
@@ -12,8 +11,8 @@ export default function LandingPage({ onStartCandidate, onStartRecruiter, onStar
         .catch(err => console.error("Failed to load ads", err));
     };
 
-    fetchAds(); // Initial fetch
-    const interval = setInterval(fetchAds, 10000); // Poll every 10 seconds
+    fetchAds(); 
+    const interval = setInterval(fetchAds, 10000); 
     return () => clearInterval(interval);
   }, []);
 
@@ -31,20 +30,16 @@ export default function LandingPage({ onStartCandidate, onStartRecruiter, onStar
       
       {/* --- HERO SECTION --- */}
       <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '20px', background: 'radial-gradient(circle at center top, #1e293b 0%, #020617 80%)' }}>
-        
         <div style={{ padding: '8px 16px', background: 'rgba(56, 189, 248, 0.1)', border: '1px solid rgba(56, 189, 248, 0.2)', borderRadius: '20px', color: '#38bdf8', fontSize: '14px', marginBottom: '25px', letterSpacing: '1px' }}>
           🚀 THE FUTURE OF HIRING IS HERE
         </div>
-
         <h1 style={{ fontSize: '4.5rem', fontWeight: '800', marginBottom: '20px', background: 'linear-gradient(to right, #e2e8f0, #38bdf8, #8b5cf6)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', lineHeight: '1.1' }}>
           Elevate Your Career<br/>With AI Interviews
         </h1>
-        
         <p style={{ fontSize: '1.25rem', color: '#94a3b8', maxWidth: '650px', marginBottom: '40px', lineHeight: '1.6' }}>
           Connect directly with top companies. Take AI-driven assessments on your own schedule and land your dream role faster than ever before.
         </p>
-        
-        <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap', justifyContent: 'center' }}>
+        <div style={{ display: 'grid', gap: '15px', flexWrap: 'wrap', justifyContent: 'center' }}>
           <button className="btn primary" onClick={scrollToJobs} style={{ padding: '16px 32px', fontSize: '1.1rem', borderRadius: '8px', background: 'linear-gradient(135deg, #38bdf8, #2563eb)', border: 'none', boxShadow: '0 10px 25px rgba(37, 99, 235, 0.4)' }}>
             🔍 View Open Positions
           </button>
@@ -55,10 +50,7 @@ export default function LandingPage({ onStartCandidate, onStartRecruiter, onStar
             🏢 Recruiter Login
           </button>
         </div>
-
-        <div onClick={onStartAdmin} style={{ marginTop: '50px',padding: '10px 24px', fontSize: '0.9rem', fontSize: '13px', color: '#000000',borderRadius: '8px', cursor: 'pointer', background: 'linear-gradient(135deg, #38bdf8, #2563eb)', border: 'none', boxShadow: '0 10px 25px rgba(37, 99, 235, 0.4)' }}>
-           🛡️ Admin Access
-        </div>
+        <div onClick={onStartAdmin} style={{ marginTop: '50px',padding: '12px 28px',fontSize: '13px', color: '#ffffff', cursor: 'pointer', background: 'linear-gradient(135deg, #38bdf8, #2563eb)',border: 'none', borderRadius: '8px', }}>🛡️ Admin Access</div>
       </div>
 
       {/* --- BEAUTIFUL JOB BOARD SECTION --- */}
@@ -92,17 +84,22 @@ export default function LandingPage({ onStartCandidate, onStartRecruiter, onStar
                     </div>
                   </div>
 
-                  {/* Job Title & Tags */}
                   <h3 style={{ fontSize: '1.6rem', color: '#f8fafc', margin: '0 0 15px 0' }}>{ad.job_title}</h3>
-                  <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
-                    <span style={{ padding: '6px 12px', background: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 'bold' }}>Full-Time</span>
-                    <span style={{ padding: '6px 12px', background: 'rgba(34, 197, 94, 0.1)', color: '#22c55e', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 'bold' }}>Remote</span>
+                  
+                  {/* EXPLICIT SCHEDULE & LOCATION TAGS */}
+                  <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
+                    <span style={{ padding: '6px 12px', background: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                        {ad.schedule || 'Full-time'}
+                    </span>
+                    <span style={{ padding: '6px 12px', background: 'rgba(34, 197, 94, 0.1)', color: '#22c55e', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                        {ad.location || 'Remote'}
+                    </span>
                   </div>
 
-                  {/* Description */}
-                  <p style={{ color: '#94a3b8', fontSize: '1rem', lineHeight: '1.6', flex: 1, marginBottom: '25px', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: '3', WebkitBoxOrient: 'vertical' }}>
+                  {/* DESCRIPTION WITH NEWLINES ENFORCED (whiteSpace: pre-wrap) */}
+                  <div style={{ color: '#94a3b8', fontSize: '1rem', lineHeight: '1.6', flex: 1, marginBottom: '25px', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: '3', WebkitBoxOrient: 'vertical', whiteSpace: 'pre-wrap' }}>
                     {ad.description}
-                  </p>
+                  </div>
                   
                   {/* Apply Button */}
                   <button onClick={() => handleApplyClick(ad)} className="btn primary" style={{ width: '100%', padding: '15px', borderRadius: '10px', fontSize: '1.1rem', background: '#38bdf8', color: '#0f172a', fontWeight: 'bold', border: 'none' }}>

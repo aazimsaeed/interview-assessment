@@ -162,6 +162,8 @@ class AdCreate(BaseModel):
     company_name: str
     job_title: str
     description: str
+    schedule: str = "Full-time"
+    location: str = "Remote"
 
 class ApplicationCreate(BaseModel):
     candidate_username: str
@@ -467,16 +469,11 @@ async def forgot_password_reset(payload: PasswordReset):
 
 @app.post("/api/advertisements")
 async def create_advertisement(ad: AdCreate):
-    ad_id = str(uuid.uuid4())[:8]
-    await advertisements_collection.insert_one({
-        "id": ad_id,
-        "recruiter_key": ad.recruiter_key,
-        "company_name": ad.company_name,
-        "job_title": ad.job_title,
-        "description": ad.description,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    })
-    return {"message": "Advertisement created", "id": ad_id}
+    ad_dict = ad.dict()
+    ad_dict["id"] = str(uuid.uuid4())
+    ad_dict["created_at"] = datetime.utcnow().isoformat()
+    await advertisements_collection.insert_one(ad_dict)
+    return {"message": "Advertisement created successfully"}
 
 @app.get("/api/advertisements")
 async def get_all_advertisements():
@@ -488,7 +485,7 @@ async def get_all_advertisements():
 async def apply_for_job(app: ApplicationCreate):
     app_id = str(uuid.uuid4())[:8]
     
-    # Check if already applied
+    # 1. Check if candidate has already applied for this EXACT job
     existing = await applications_collection.find_one({
         "candidate_username": app.candidate_username, 
         "ad_id": app.ad_id
@@ -496,6 +493,7 @@ async def apply_for_job(app: ApplicationCreate):
     if existing:
         return {"message": "Already applied"}
         
+    # 2. Add to applications collection as "pending" EVERY TIME
     await applications_collection.insert_one({
         "id": app_id,
         "candidate_username": app.candidate_username,
@@ -504,6 +502,7 @@ async def apply_for_job(app: ApplicationCreate):
         "status": "pending",
         "created_at": datetime.now(timezone.utc).isoformat()
     })
+    
     return {"message": "Application submitted"}
 
 @app.get("/api/recruiters/{recruiter_key}/applications")
@@ -608,6 +607,32 @@ async def update_candidate_profile(username: str, data: ProfileUpdate):
     )
     return {"message": "Candidate Profile updated successfully"}
 
+# ==========================================
+# GET PROFILE ENDPOINTS (Add these to fix the "N/A" issue)
+# ==========================================
+
+@app.get("/api/recruiters/{username}/profile")
+async def get_recruiter_profile(username: str):
+    user = await recruiters_collection.find_one({"username": username})
+    if not user:
+        raise HTTPException(status_code=404, detail="Recruiter not found")
+        
+    return {
+        "email": user.get("email", ""),
+        "company_name": user.get("company_name", "")
+    }
+
+@app.get("/api/candidates/{username}/profile")
+async def get_candidate_profile(username: str):
+    user = await candidates_collection.find_one({"username": username})
+    if not user:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+        
+    return {
+        "email": user.get("email", ""),
+        "phone": user.get("phone", "")
+    }
+
 @app.get("/api/candidates")
 async def get_all_candidates(recruiter_key: str = None):
     if not recruiter_key: return [] 
@@ -617,18 +642,16 @@ async def get_all_candidates(recruiter_key: str = None):
     
     result = []
     for u in users:
-        # Find the specific role they were approved for by THIS recruiter
-        target_role = "Unknown Role"
+        # A candidate might be linked to the same recruiter for MULTIPLE roles!
+        # We loop through all links and append a result for EVERY match.
         for link in u.get("linked_recruiters", []):
             if link.get("recruiter_key") == recruiter_key:
-                target_role = link.get("target_role", "Unknown Role")
-                break
+                result.append({
+                    "username": u["username"], 
+                    "email": u.get("email", ""), 
+                    "target_role": link.get("target_role", "Unknown Role")
+                })
                 
-        result.append({
-            "username": u["username"], 
-            "email": u.get("email", ""), 
-            "target_role": target_role # <-- Pass it to the frontend
-        })
     return result
 
 # ==========================================
@@ -724,15 +747,17 @@ async def delete_advertisement(ad_id: str):
 @app.post("/api/candidates/{username}/unlink")
 async def unlink_candidate(username: str, payload: dict):
     recruiter_key = payload.get("recruiter_key")
-    if not recruiter_key:
-        raise HTTPException(status_code=400, detail="Missing recruiter_key")
+    target_role = payload.get("target_role")
+    
+    if not recruiter_key or not target_role:
+        raise HTTPException(status_code=400, detail="Missing recruiter_key or target_role")
         
-    # Pull (remove) this recruiter from the candidate's linked array
+    # Pull (remove) ONLY the specific job role for this recruiter
     await candidates_collection.update_one(
         {"username": username},
-        {"$pull": {"linked_recruiters": {"recruiter_key": recruiter_key}}}
+        {"$pull": {"linked_recruiters": {"recruiter_key": recruiter_key, "target_role": target_role}}}
     )
-    return {"message": "Candidate successfully unlinked"}
+    return {"message": "Candidate role successfully unlinked"}
 # ==========================================
 # GEMINI GENERATION & EVALUATION
 # ==========================================
@@ -844,6 +869,13 @@ async def get_interview_report(interview_id: str):
     if not db_report:
         raise HTTPException(status_code=404, detail="Report not found or interview incomplete.")
     return db_report
+@app.delete("/api/reports/{interview_id}")
+async def delete_interview_report(interview_id: str):
+    # This specifically deletes the report, reverting the session to "Pending"
+    result = await reports_collection.delete_one({"interview_id": interview_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return {"message": "Report permanently deleted."}
 
 if __name__ == "__main__":
     import uvicorn
