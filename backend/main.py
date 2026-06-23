@@ -241,19 +241,35 @@ async def admin_delete_user(role: str, username: str):
         db_recruiter = await recruiters_collection.find_one({"username": username})
         if not db_recruiter:
             raise HTTPException(status_code=404, detail="Recruiter not found")
-        recruiter_key = db_recruiter.get("recruiter_key")
-        if recruiter_key:
+            
+        rec_key = db_recruiter.get("recruiter_key")
+        
+        if rec_key:
+            # Wipe ads and interviews
+            await advertisements_collection.delete_many({"recruiter_key": rec_key})
+            await interviews_collection.delete_many({"recruiter_key": rec_key})
+            
+            # Unlink candidates entirely
             await candidates_collection.update_many(
-                {"linked_recruiter": recruiter_key},
-                {"$set": {"linked_recruiter": None, "recruiter_name": None}}
+                {"linked_recruiters.recruiter_key": rec_key},
+                {"$pull": {"linked_recruiters": {"recruiter_key": rec_key}}}
             )
+            await candidates_collection.update_many(
+                {"linked_recruiter": rec_key},
+                {"$unset": {"linked_recruiter": "", "recruiter_name": ""}}
+            )
+            
         await recruiters_collection.delete_one({"username": username})
         return {"message": f"Recruiter {username} deleted."}
+        
     elif role == "candidate":
+        # Ensure candidate cleanup is also absolute
+        await applications_collection.delete_many({"candidate_username": username})
         await reports_collection.delete_many({"candidate_name": username})
         await interviews_collection.delete_many({"candidate_name": username})
         await candidates_collection.delete_one({"username": username})
         return {"message": f"Candidate {username} deleted."}
+        
     raise HTTPException(status_code=400, detail="Invalid role")
 
 @app.get("/api/admins/all-interviews")
@@ -353,17 +369,24 @@ async def delete_recruiter_account(username: str):
         
     rec_key = user.get("recruiter_key")
     
-    # 1. Cascade Delete: Wipe all of their ads and interviews
-    await advertisements_collection.delete_many({"recruiter_key": rec_key})
-    await interviews_collection.delete_many({"recruiter_key": rec_key})
+    if rec_key:
+        # 1. Cascade Delete: Wipe all of their ads and interviews
+        await advertisements_collection.delete_many({"recruiter_key": rec_key})
+        await interviews_collection.delete_many({"recruiter_key": rec_key})
+        
+        # 2. Unlink Array: Remove this recruiter from any candidate's multiple-job array
+        await candidates_collection.update_many(
+            {"linked_recruiters.recruiter_key": rec_key},
+            {"$pull": {"linked_recruiters": {"recruiter_key": rec_key}}}
+        )
+        
+        # 3. Unlink Legacy: Clear out the old single-link fields just in case
+        await candidates_collection.update_many(
+            {"linked_recruiter": rec_key},
+            {"$unset": {"linked_recruiter": "", "recruiter_name": ""}}
+        )
     
-    # 2. Unlink: Remove this recruiter from any candidate's approved list
-    await candidates_collection.update_many(
-        {"linked_recruiters.recruiter_key": rec_key},
-        {"$pull": {"linked_recruiters": {"recruiter_key": rec_key}}}
-    )
-    
-    # 3. Delete the actual recruiter account
+    # 4. Delete the actual recruiter account
     await recruiters_collection.delete_one({"username": username})
     return {"message": "Recruiter account and all associated data deleted successfully"}
 
