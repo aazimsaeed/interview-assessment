@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { API_BASE } from '../config';
 
 // ==========================================
 // REAL-DATA CHART COMPONENTS 
@@ -68,8 +69,6 @@ export default function AdminDashboard({ onBack, onViewReport }) {
   // Controls States
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
-
-  const API_BASE = "http://localhost:8000";
 
   const fetchAdminData = async () => {
     setLoading(true);

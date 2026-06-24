@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef} from 'react';
 import emailjs from '@emailjs/browser';
+import { API_BASE } from '../config';
 
 export default function InterviewerDashboard({ username, recruiterKey, companyName: initialCompanyName, onBack, onViewReport }) {
   const [activeTab, setActiveTab] = useState('interviews'); 
@@ -33,7 +34,6 @@ export default function InterviewerDashboard({ username, recruiterKey, companyNa
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const API_BASE = "http://localhost:8000";
   const EMAILJS_SERVICE_ID = "service_rvp9rub"; 
   const EMAILJS_TEMPLATE_ID = "template_d0bdb6h";
   const EMAILJS_PUBLIC_KEY = "z_z2F1e4quN7sEzkd";

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import emailjs from '@emailjs/browser';
+import { API_BASE } from '../config';
 
 export default function AuthPage({ type, onLogin, onBack }) {
     const [isRegistering, setIsRegistering] = useState(false);
@@ -31,8 +32,6 @@ export default function AuthPage({ type, onLogin, onBack }) {
     const [adminEmail, setAdminEmail] = useState("");
     const [otp, setOtp] = useState("");
     const [otpStep, setOtpStep] = useState(1); // 1 = Verify, 2 = Send, 3 = Enter
-
-    const API_BASE = "http://localhost:8000"; 
 
     // --- EMAILJS CONFIGURATION ---
     const EMAILJS_SERVICE_ID = "service_rvp9rub"; 

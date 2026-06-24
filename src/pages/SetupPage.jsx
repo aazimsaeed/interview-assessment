@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import emailjs from '@emailjs/browser';
+import { API_BASE } from '../config';
 
 export default function SetupPage({ onStart, onBack, username, onViewReport }) {
   const [activeTab, setActiveTab] = useState('pending');
@@ -10,6 +11,7 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
   const [showOtpField, setShowOtpField] = useState(false);
   const [sendingOtp, setSendingOtp] = useState(false);
 
+  // Profile Edit Toggle State
   const [isEditingProfile, setIsEditingProfile] = useState(false);
 
   const [linkedCompanies, setLinkedCompanies] = useState([]); 
@@ -20,8 +22,8 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const API_BASE = "http://localhost:8000";
-  const EMAILJS_SERVICE_ID = "service_rvp9rub"; 
+
+ const EMAILJS_SERVICE_ID = "service_rvp9rub"; 
   const EMAILJS_TEMPLATE_ID = "template_d0bdb6h";
   const EMAILJS_PUBLIC_KEY = "z_z2F1e4quN7sEzkd";
 
@@ -31,6 +33,7 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
       const profRes = await fetch(`${API_BASE}/api/candidates/${username}/profile`);
       if (profRes.ok) {
           const profData = await profRes.json();
+          // Do not overwrite inputs if the user is currently editing
           if (!isEditingProfile && !showOtpField && updateOtp === "") {
               setInitialEmail(profData.email || '');
               setProfile({ 
@@ -123,8 +126,10 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
           const data = await res.json();
           if(res.ok) {
               alert("Profile updated successfully!");
-              setInitialEmail(profile.email); setShowOtpField(false); setUpdateOtp("");
-              setIsEditingProfile(false);
+              setInitialEmail(profile.email); 
+              setShowOtpField(false); 
+              setUpdateOtp("");
+              setIsEditingProfile(false); // Switch back to view mode
           } else { alert(data.detail || "Failed to update profile."); }
       } catch (err) { alert("Error saving profile."); }
       finally { setSaving(false); }
@@ -240,11 +245,13 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
 
                     <h3 style={{ fontSize: '1.6rem', color: '#f8fafc', margin: '0 0 15px 0' }}>{ad.job_title}</h3>
                     
+                    {/* EXPLICIT SCHEDULE & LOCATION TAGS FOR SETUP PAGE */}
                     <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
                         <span style={{ padding: '6px 12px', background: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 'bold' }}>{ad.schedule || 'Full-time'}</span>
                         <span style={{ padding: '6px 12px', background: 'rgba(34, 197, 94, 0.1)', color: '#22c55e', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 'bold' }}>{ad.location || 'Remote'}</span>
                     </div>
 
+                    {/* NEWLINES ENFORCED HERE */}
                     <div style={{ color: '#94a3b8', fontSize: '1rem', lineHeight: '1.6', flex: 1, marginBottom: '25px', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: '3', WebkitBoxOrient: 'vertical', whiteSpace: 'pre-wrap' }}>
                         {ad.description}
                     </div>
@@ -266,6 +273,7 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
                  <h2 style={{ margin: 0, color: '#f8fafc' }}>{username}</h2>
              </div>
              
+             {/* Profile Block (Swaps between View and Edit mode) */}
              <div style={{ background: '#0f172a', padding: '30px', borderRadius: '12px', border: '1px solid #334155' }}>
                  
                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
@@ -278,6 +286,7 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
                  </div>
 
                  {!isEditingProfile ? (
+                     // VIEW MODE
                      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                          <div>
                              <label style={{ display: 'block', marginBottom: '5px', color: '#94a3b8', fontSize: '13px' }}>Email Address</label>
@@ -293,6 +302,7 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
                          </div>
                      </div>
                  ) : (
+                     // EDIT MODE
                      <form onSubmit={handleUpdateProfile} style={{ display: 'flex', flexDirection: 'column', gap: '20px', animation: 'fadeIn 0.3s' }}>
                          <div>
                              <label style={{ display: 'block', marginBottom: '8px', color: '#94a3b8' }}>Email Address</label>
@@ -335,7 +345,7 @@ export default function SetupPage({ onStart, onBack, username, onViewReport }) {
                  <h3 style={{ color: '#94a3b8', textTransform: 'uppercase', fontSize: '13px', marginBottom: '15px' }}>Approved Company Links</h3>
                  {linkedCompanies.length === 0 ? <p style={{ color: '#64748b' }}>No connections yet.</p> : (
                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                        {linkedCompanies.map((comp, i) => <div key={i} style={{ background: 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.3)', color: '#22c55e', padding: '8px 16px', borderRadius: '20px', fontSize: '14px' }}>✅ {comp.company_name} - {comp.target_role || 'General'}</div>)}
+                        {linkedCompanies.map((comp, i) => <div key={i} style={{ background: 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.3)', color: '#22c55e', padding: '8px 16px', borderRadius: '20px', fontSize: '14px' }}>✅ {comp.company_name}</div>)}
                      </div>
                  )}
              </div>
