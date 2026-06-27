@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { API_BASE } from '../config';
 
 export default function LandingPage({ onStartCandidate, onStartRecruiter, onStartAdmin }) {
   const [ads, setAds] = useState([]);
 
   useEffect(() => {
     const fetchAds = () => {
-      fetch("http://localhost:8000/api/advertisements")
+      fetch(`${API_BASE}/api/advertisements`)
         .then(res => res.json())
         .then(data => setAds(data))
         .catch(err => console.error("Failed to load ads", err));

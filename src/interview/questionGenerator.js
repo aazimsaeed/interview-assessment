@@ -1,3 +1,5 @@
+import { API_BASE } from '../config';
+
 export const speakQuestion = (text, onEndCallback) => {
   if (!('speechSynthesis' in window)) {
     console.warn("Text-to-Speech is not supported in this browser.");
@@ -44,7 +46,7 @@ export const evaluateAnswer = async (question, userAnswer, interviewId = "test-s
 
   try {
     // Calling the FastAPI backend instead of Gemini
-    const response = await fetch('http://localhost:8000/api/evaluate', {
+    const response = await fetch(`${API_BASE}/api/evaluate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
