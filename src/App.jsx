@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-
+import { API_BASE } from '../config';
 // Import Pages
 import LandingPage from './pages/LandingPage';
 import AuthPage from './pages/AuthPage';
@@ -174,7 +174,7 @@ export default function App() {
               onFinish={async (report) => {
                   if (interviewData?.id && report) {
                       try {
-                          await fetch('http://localhost:8000/api/reports', {
+                          await fetch(`${API_BASE}/api/reports`, {
                               method: 'POST', headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({
                                   interview_id: interviewData.id, candidate_name: interviewData.studentName,
