@@ -136,26 +136,12 @@ class LinkPayload(BaseModel):
 class PolishRequest(BaseModel):
     raw_text: str
 
-class ReportMetrics(BaseModel):
-    confidenceScore: int
-    eyeContactPercentage: int
-    facialExpressionFrequency: dict
-    headMovementIntensity: int
-    speech: dict
-
-class ReportDetails(BaseModel):
-    strengths: List[str]
-    weaknesses: List[str]
-    suggestions: List[str]
-    timeline: list = []
-    snapshots: list = [] 
-
 class ReportPayload(BaseModel):
     interview_id: str
     candidate_name: str
     duration: int
-    metrics: ReportMetrics
-    report: ReportDetails
+    metrics: dict
+    report: dict
 
 class AdCreate(BaseModel):
     recruiter_key: str
