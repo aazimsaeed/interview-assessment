@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1300" viewBox="0 0 2200 1300">
+  <defs>
+    <marker id="arrow" markerWidth="16" markerHeight="16" refX="13" refY="8" orient="auto" markerUnits="strokeWidth"><path d="M2,2 L14,8 L2,14 Z" fill="#111"/></marker>
+    <style>
+      .title{font-family:Arial,Helvetica,sans-serif;font-size:46px;font-weight:800;fill:#111;letter-spacing:0}
+      .subtitle{font-family:Arial,Helvetica,sans-serif;font-size:20px;fill:#333;letter-spacing:0}
+      .heading{font-family:Arial,Helvetica,sans-serif;font-size:26px;font-weight:800;fill:#111;letter-spacing:0}
+      .procNo{font-family:Arial,Helvetica,sans-serif;font-size:20px;font-weight:800;fill:#111;letter-spacing:0}
+      .small{font-family:Arial,Helvetica,sans-serif;font-size:18px;fill:#111;letter-spacing:0}
+      .tiny{font-family:Arial,Helvetica,sans-serif;font-size:15px;fill:#111;letter-spacing:0}
+      .label{font-family:Arial,Helvetica,sans-serif;font-size:16px;font-weight:700;fill:#111;letter-spacing:0}
+      .entity{fill:#fff;stroke:#111;stroke-width:3}.process{fill:#fff;stroke:#111;stroke-width:3}.store{fill:#fff;stroke:#111;stroke-width:3}
+      .flow{fill:none;stroke:#111;stroke-width:2.8;marker-end:url(#arrow)}
+    </style>
+  </defs><rect width="2200" height="1300" fill="#fff"/><text x="1100" y="70" class="title" text-anchor="middle"><tspan x="1100" dy="0">Level 0 DFD - Context Diagram</tspan></text><text x="1100" y="112" class="subtitle" text-anchor="middle"><tspan x="1100" dy="0">AI Interview Assessment System</tspan></text>
+  <rect x="100" y="230" width="290" height="155" class="entity"/><text x="245" y="284" class="heading" text-anchor="middle"><tspan x="245" dy="0">CANDIDATE</tspan></text><text x="245" y="320" class="small" text-anchor="middle"><tspan x="245" dy="0">register/login</tspan><tspan x="245" dy="25">apply and interview</tspan></text>
+  <rect x="100" y="875" width="290" height="155" class="entity"/><text x="245" y="929" class="heading" text-anchor="middle"><tspan x="245" dy="0">RECRUITER</tspan></text><text x="245" y="965" class="small" text-anchor="middle"><tspan x="245" dy="0">post jobs</tspan><tspan x="245" dy="25">create assessments</tspan></text>
+  <rect x="1810" y="230" width="290" height="155" class="entity"/><text x="1955" y="284" class="heading" text-anchor="middle"><tspan x="1955" dy="0">ADMIN</tspan></text><text x="1955" y="320" class="small" text-anchor="middle"><tspan x="1955" dy="0">manage users</tspan><tspan x="1955" dy="25">view system data</tspan></text>
+  <rect x="1810" y="555" width="290" height="155" class="entity"/><text x="1955" y="609" class="heading" text-anchor="middle"><tspan x="1955" dy="0">GEMINI AI</tspan></text><text x="1955" y="645" class="small" text-anchor="middle"><tspan x="1955" dy="0">questions</tspan><tspan x="1955" dy="25">answer scoring</tspan></text>
+  <rect x="1810" y="875" width="290" height="155" class="entity"/><text x="1955" y="929" class="heading" text-anchor="middle"><tspan x="1955" dy="0">EMAIL SERVICE</tspan></text><text x="1955" y="965" class="small" text-anchor="middle"><tspan x="1955" dy="0">OTP delivery</tspan><tspan x="1955" dy="25">verification mail</tspan></text>
+  <rect x="760" y="505" width="680" height="300" rx="26" class="process"/><text x="790" y="539" class="procNo" text-anchor="start"><tspan x="790" dy="0">0.0</tspan></text><text x="1100" y="568" class="heading" text-anchor="middle"><tspan x="1100" dy="0">AI INTERVIEW ASSESSMENT SYSTEM</tspan></text><text x="1100" y="603" class="tiny" text-anchor="middle"><tspan x="1100" dy="0">authentication, job board, interview setup,</tspan><tspan x="1100" dy="20">live monitoring, AI evaluation, reports</tspan></text>
+  <path d="M390 305 C520 305 615 430 760 575" class="flow"/><rect x="437.5" y="361" width="235" height="32" fill="#fff"/><text x="555" y="383" class="label" text-anchor="middle"><tspan x="555" dy="0">signup, apply, answers</tspan></text>
+  <path d="M760 635 C615 575 520 385 390 375" class="flow"/><rect x="442.5" y="535" width="235" height="32" fill="#fff"/><text x="560" y="557" class="label" text-anchor="middle"><tspan x="560" dy="0">jobs, questions, report</tspan></text>
+  <path d="M390 952 C560 930 635 790 760 715" class="flow"/><rect x="442" y="828" width="260" height="32" fill="#fff"/><text x="572" y="850" class="label" text-anchor="middle"><tspan x="572" dy="0">jobs, approvals, questions</tspan></text>
+  <path d="M760 755 C625 835 540 940 390 1000" class="flow"/><rect x="420" y="770" width="280" height="32" fill="#fff"/><text x="560" y="792" class="label" text-anchor="middle"><tspan x="560" dy="0">applications, rankings, reports</tspan></text>
+  <path d="M1810 305 C1655 320 1565 465 1440 575" class="flow"/><rect x="1532.5" y="383" width="185" height="32" fill="#fff"/><text x="1625" y="405" class="label" text-anchor="middle"><tspan x="1625" dy="0">admin requests</tspan></text>
+  <path d="M1440 635 C1565 590 1655 385 1810 375" class="flow"/><rect x="1520" y="538" width="220" height="32" fill="#fff"/><text x="1630" y="560" class="label" text-anchor="middle"><tspan x="1630" dy="0">stats, users, sessions</tspan></text>
+  <path d="M1440 625 L1810 625" class="flow"/><rect x="1520" y="585" width="210" height="32" fill="#fff"/><text x="1625" y="607" class="label" text-anchor="middle"><tspan x="1625" dy="0">generate/evaluate</tspan></text>
+  <path d="M1810 665 L1440 680" class="flow"/><rect x="1565" y="678" width="120" height="32" fill="#fff"/><text x="1625" y="700" class="label" text-anchor="middle"><tspan x="1625" dy="0">AI result</tspan></text>
+  <path d="M1440 745 C1590 795 1665 895 1810 952" class="flow"/><rect x="1545" y="821" width="150" height="32" fill="#fff"/><text x="1620" y="843" class="label" text-anchor="middle"><tspan x="1620" dy="0">OTP request</tspan></text>
+  <path d="M1810 1000 C1660 985 1585 835 1440 765" class="flow"/><rect x="1540" y="994" width="170" height="32" fill="#fff"/><text x="1625" y="1016" class="label" text-anchor="middle"><tspan x="1625" dy="0">delivery status</tspan></text>
+  
+</svg>

@@ -1,0 +1,5 @@
+Level 0 DFD: This context diagram represents the complete AI Interview Assessment System as a single process. Candidates, recruiters, administrators, Gemini AI, and the email service exchange data with the platform for authentication, job applications, assessment creation, live interviews, AI scoring, OTP delivery, and report access.
+
+Level 1 DFD: This diagram decomposes the platform into its main processes: authentication and profile management, job board handling, assessment setup, live interview monitoring, AI services, reports, and admin management. It also shows how MongoDB stores users, advertisements, applications, interviews, reports, and hidden sessions.
+
+Level 2 DFD: This detailed flow focuses on the live interview workflow. The system loads interview questions, captures camera and microphone input, runs MediaPipe-based analysis, transcribes answers, sends responses for AI evaluation, builds behavior and speech metrics, saves the report, and displays the final dashboard.

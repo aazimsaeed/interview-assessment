@@ -474,13 +474,13 @@ const handleDeleteReport = async (interviewId) => {
                                 </button>
                             </div>
                             
-                            <div style={{ background: '#0f172a', padding: '20px', borderRadius: '8px', border: '1px solid #1e293b' }}>
+                            {/* <div style={{ background: '#0f172a', padding: '20px', borderRadius: '8px', border: '1px solid #1e293b' }}>
                                 <h4 style={{ margin: '0 0 10px 0', color: '#e2e8f0' }}>Platform Maintenance</h4>
                                 <p style={{ color: '#94a3b8', fontSize: '13px', marginBottom: '15px' }}>Toggle UI maintenance restrictions. (Note: Only applies to new dashboard layouts visually).</p>
                                 <button className="btn" onClick={() => setMaintenanceMode(!maintenanceMode)} style={{ background: maintenanceMode ? '#ef4444' : '#10b981', color: '#fff', border: 'none', fontWeight: 'bold' }}>
                                     {maintenanceMode ? '🛑 Disable Maintenance Mode' : '🚧 Enable Maintenance Mode'}
                                 </button>
-                            </div>
+                            </div> */}
 
                             <div style={{ background: '#0f172a', padding: '20px', borderRadius: '8px', border: '1px solid #7f1d1d', gridColumn: 'span 2' }}>
                                 <h4 style={{ margin: '0 0 10px 0', color: '#fca5a5' }}>Danger Zone</h4>
